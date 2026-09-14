@@ -69,6 +69,42 @@ class Agent:
         self.settings = settings
         self.client = client
 
+    @staticmethod
+    def provider_error(response: httpx.Response, result: dict | None = None) -> UserError:
+        """Classify provider failures without exposing echoed prompts or credentials."""
+        if result is None:
+            try:
+                result = response.json()
+            except ValueError:
+                result = {}
+        error = result.get("error", {}) if isinstance(result, dict) else {}
+        code = error.get("code") if isinstance(error, dict) else None
+        status = response.status_code
+        label = f"HTTP {status}" if status >= 400 else "an error"
+        hint = {
+            400: "The provider rejected the image parameters or model input. Check model requirements and the selected API mode.",
+            401: "The API key was rejected. Check the saved AI credentials.",
+            402: "The provider reports insufficient credits or a spending limit. Check your provider billing settings.",
+            403: "The provider denied access. Check model permissions and provider restrictions.",
+            404: "The model or endpoint was not found. Check the model ID and API mode.",
+            408: "The provider timed out. Try again or increase the timeout.",
+            422: "The provider rejected the request parameters. Check the model's required inputs.",
+            429: "The provider rate limit was reached. Wait before trying again.",
+        }.get(status, "Check the provider status, model capabilities, and API mode.")
+        if isinstance(code, int) and status < 400:
+            label = f"error {code}"
+        # Provider messages may echo prompts, keys, or request bodies. Never return them verbatim.
+        details = json.dumps(error).casefold()
+        if "reference" in details and any(
+            word in details for word in ("required", "at least", "missing")
+        ):
+            hint = "This model requires a reference image. Attach one or choose a model that supports text-only image generation."
+        elif "no endpoints" in details:
+            hint = "No provider endpoint matches this model and the requested modalities. Check the model and API mode."
+        elif "moderation" in details or "content policy" in details:
+            hint = "The provider declined this request under its content policy."
+        return UserError(f"AI provider returned {label}. {hint}")
+
     async def post(self, path: str, payload: dict) -> dict:
         if not self.settings.api_key:
             raise UserError("Add an AI API key in Connection settings first.")
@@ -79,20 +115,15 @@ class Agent:
                 headers={"Authorization": f"Bearer {self.settings.api_key}"},
                 timeout=self.settings.request_timeout,
             )
-            response.raise_for_status()
+            if response.is_error:
+                raise self.provider_error(response)
             result = response.json()
             if "error" in result:
-                raise UserError(
-                    "The AI provider reported an error. Check the model and its supported capabilities."
-                )
+                raise self.provider_error(response, result)
             return result
         except httpx.TimeoutException:
             raise UserError(
                 "The AI provider timed out. Try again or increase the timeout."
-            ) from None
-        except httpx.HTTPStatusError as exc:
-            raise UserError(
-                f"AI provider returned HTTP {exc.response.status_code}. Check credentials, credits, and model capabilities."
             ) from None
         except (httpx.HTTPError, ValueError):
             raise UserError(
@@ -118,6 +149,17 @@ class Agent:
     async def image(self, instruction: str, inputs: list[Media]) -> list[Media]:
         if not self.settings.image_model:
             raise UserError("Choose an image model in Agent settings to enable image editing.")
+        model = self.settings.image_model.casefold()
+        if model.startswith("recraft/") and "styles" in model and not inputs:
+            raise UserError(
+                f"{self.settings.image_model} requires a style-reference image; it cannot generate from text alone. "
+                "Choose a general-purpose raster image model for text-to-image generation or background removal."
+            )
+        if model.startswith("recraft/") and "vector" in model:
+            raise UserError(
+                f"{self.settings.image_model} produces SVG, which this app does not support. "
+                "Choose an image model that outputs PNG, JPEG, WebP, or GIF."
+            )
         if self.settings.image_api == "images":
             # OpenAI-compatible generation endpoint; editing uses multimodal chat mode.
             if inputs:
@@ -223,7 +265,11 @@ class Agent:
                     outputs = await self.image(args["prompt"], inputs)
                     answer.media.extend(outputs)
                     result = f"Success: {len(outputs)} image(s) created and queued for delivery."
-                except (KeyError, ValueError, TypeError, UserError) as exc:
-                    result = str(exc) if isinstance(exc, UserError) else "Invalid tool arguments."
+                except UserError as exc:
+                    # Surface operational failures directly and record them as failures. A chat
+                    # model must not hide the cause or trigger repeated billable image retries.
+                    raise UserError(f"Image tool failed: {exc}") from None
+                except (KeyError, ValueError, TypeError):
+                    result = "Invalid tool arguments."
                 messages.append({"role": "tool", "tool_call_id": call["id"], "content": result})
         raise UserError("The agent could not finish within its tool budget.")

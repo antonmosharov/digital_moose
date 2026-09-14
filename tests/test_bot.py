@@ -216,6 +216,87 @@ async def test_provider_error_does_not_leak_credentials():
         assert "secret-key" not in str(error.value)
 
 
+@pytest.mark.parametrize(
+    "inputs,reason", [([], "style-reference"), ([Media("in.png", "image/png", b"in")], "SVG")]
+)
+async def test_recraft_styles_vector_fails_before_billable_request(inputs, reason):
+    client = AsyncMock()
+    agent = Agent(Settings(api_key="key", image_model="recraft/recraft-v4-styles-vector"), client)
+    with pytest.raises(UserError, match=reason):
+        await agent.image("Create an image", inputs)
+    client.post.assert_not_called()
+
+
+async def test_image_failure_is_not_rewritten_by_chat_model():
+    requests = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if payload["model"] == "chat-model":
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "create_or_edit_image",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "prompt": "Create a purple circle",
+                                                    "use_input_images": False,
+                                                }
+                                            ),
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(402, json={"error": {"message": "Insufficient credits; secret-key"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        agent = Agent(
+            Settings(api_key="secret-key", model="chat-model", image_model="image-model"), client
+        )
+        with pytest.raises(UserError, match="Image tool failed:.*HTTP 402.*credits") as error:
+            await agent.run(Prompt("Create a purple circle"))
+        assert "secret-key" not in str(error.value)
+    assert len(requests) == 2  # No apology completion or repeat image request.
+
+
+def test_provider_reference_requirement_is_actionable_and_redacted():
+    response = httpx.Response(
+        400, json={"error": {"message": "At least one reference image is required. secret prompt"}}
+    )
+    error = str(Agent.provider_error(response))
+    assert "requires a reference image" in error
+    assert "secret prompt" not in error
+
+
+async def test_image_failure_is_logged_as_error(store):
+    service = BotService(store, AsyncMock())
+    service.identity = {"username": "moose", "id": 42}
+    store.permit_chat(-100, "Team", True)
+    telegram = AsyncMock()
+    with patch(
+        "app.telegram.Agent.run",
+        new_callable=AsyncMock,
+        side_effect=UserError("Image tool failed: provider rejected the input"),
+    ):
+        await service.handle({"message": message()}, telegram)
+    assert store.activity()[0]["status"] == "error"
+    assert "provider rejected" in telegram.send.call_args.args[1].text
+
+
 async def test_media_delivery_preserves_threads_and_transparency():
     telegram = Telegram("token", AsyncMock())
     telegram.call = AsyncMock()

@@ -32,6 +32,18 @@ function renderActivity() {
   $('#activity-list').innerHTML=events.map(eventHTML).join('')||empty('A clean slate.','Activity will appear when your agent receives a mention.');
   $('#recent-activity').innerHTML=state.activity.slice(0,3).map(eventHTML).join('')||empty('Quiet for now.','Your agent’s next conversation starts here.');
 }
+function imageModelHint() {
+  const input=$('#agent-form [name="image_model"]');
+  const model=input.value.trim().toLowerCase();
+  const hint=input.closest('label').querySelector('small');
+  if(model.startsWith('recraft/')&&model.includes('vector')) {
+    hint.textContent='This model outputs SVG, which Moose does not support. Choose a raster image model; Recraft Styles also requires a style-reference image.';
+  } else if(model.startsWith('recraft/')&&model.includes('styles')) {
+    hint.textContent='Recraft Styles requires a style-reference image and creates new images in that style. Choose a general-purpose image model for edits such as background removal.';
+  } else {
+    hint.textContent='Must support PNG, JPEG, WebP, or GIF output; editing also requires image input.';
+  }
+}
 function render(populate=false) {
   const s=state.settings;
   const allowed=state.chats.filter(c=>c.allowed).length;
@@ -60,6 +72,7 @@ function render(populate=false) {
     }
     $('#bot-token-hint').textContent=s.has_bot_token?'Token saved. Leave blank to keep it.':'No token saved yet.';
     $('#api-key-hint').textContent=s.has_api_key?'API key saved. Leave blank to keep it.':'No API key saved yet.';
+    imageModelHint();
   }
 }
 async function refresh(populate=false) {state=await api('/state');render(populate);}
@@ -100,6 +113,7 @@ $('#chat-list').addEventListener('click',event=>{
   busy(button,async()=>{await api('/chats',{method:'PUT',body:JSON.stringify({id:chat.id,title:chat.title,allowed:!chat.allowed})});await refresh();toast('Chat access updated.');});
 });
 $('#activity-filter').addEventListener('change',renderActivity);
+$('#agent-form [name="image_model"]').addEventListener('input',imageModelHint);
 $('#playground-form').addEventListener('submit',event=>{
   event.preventDefault();const form=event.currentTarget;
   busy(form.querySelector('button'),async()=>{

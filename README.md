@@ -45,6 +45,8 @@ Replies stay in the original forum topic. Long text is split into Telegram-safe 
 - The `create_or_edit_image` tool runs in a bounded tool-call loop and passes attached images to the image model. It receives only the current request and replied-to message; there is no ambient chat history, arbitrary code execution, or web browsing tool.
 - Multimodal chat image mode uses `modalities: ["image", "text"]` and expects base64 images in `message.images` (or image content blocks). Choose a compatible provider/model. The alternative `/images/generations` mode supports generation only, with `b64_json` responses; it does not support edits.
 - Remote image URL outputs are deliberately unsupported; request a provider that returns base64. This avoids fetching model-supplied URLs from the server.
+- SVG/vector output is unsupported. Recraft vector models are rejected before generation; Recraft Styles additionally requires a style-reference image and is not a general editing model. For ordinary generation and edits, choose a raster image model (for example, `google/gemini-2.5-flash-image` in multimodal chat mode).
+- Image tool failures are surfaced directly and recorded as errors, with safe provider status hints. The chat model cannot replace these failures with a generic apology or repeatedly retry a failed image request.
 - Each request includes attachments from the tagged message and its direct reply target. **Telegram albums are not aggregated**: only the individual tagged item and direct reply target are processed. Reply to each desired image separately.
 - There is no generated audio/video output tool; output media currently means generated/edited images. Audio/video inputs depend on model support.
 
