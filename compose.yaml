@@ -1,0 +1,14 @@
+services:
+  moose:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env for Docker}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      DATA_DIR: /app/data
+    volumes:
+      - moose-data:/app/data
+    restart: unless-stopped
+volumes:
+  moose-data:
