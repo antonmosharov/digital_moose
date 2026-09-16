@@ -1,20 +1,36 @@
 import asyncio
 import hashlib
 import json
+import random
 import time
 from contextlib import suppress
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.agent import Agent, Answer
+from app.formatting import telegram_chunks
 from app.prompts import Media, Prompt, UserError, attachments, mention_spans, prompt_text
 from app.store import Store
 
 
+class TelegramFormattingError(UserError):
+    """Telegram explicitly rejected formatting; the same text can safely be retried unformatted."""
+
+
+class TelegramPhotoError(UserError):
+    """The server explicitly rejected a photo; delivery as a file is safe to retry."""
+
+
 class Telegram:
-    def __init__(self, token: str, client: httpx.AsyncClient):
+    def __init__(
+        self, token: str, client: httpx.AsyncClient, *, image_delivery="photo", on_sent=None
+    ):
         self.token = token
         self.client = client
+        self.image_delivery = image_delivery
+        self.on_sent = on_sent
 
     async def call(self, method: str, data: dict | None = None, files=None):
         try:
@@ -30,6 +46,26 @@ class Telegram:
                     await asyncio.sleep(min(result.get("parameters", {}).get("retry_after", 5), 60))
                     continue
                 code = result.get("error_code", response.status_code)
+                if code == 400 and any(
+                    fragment in result.get("description", "").casefold()
+                    for fragment in ("can't parse entities", "entity", "entities")
+                ):
+                    raise TelegramFormattingError("Telegram rejected the message formatting.")
+                if (
+                    method == "sendPhoto"
+                    and code == 400
+                    and any(
+                        fragment in result.get("description", "").casefold()
+                        for fragment in (
+                            "photo_invalid",
+                            "image_process_failed",
+                            "photo_content",
+                            "file is too big",
+                            "wrong file type",
+                        )
+                    )
+                ):
+                    raise TelegramPhotoError("Telegram could not display this image as a photo.")
                 raise UserError(
                     f"Telegram {method} failed (code {code}). Check bot permissions and configuration."
                 )
@@ -60,25 +96,51 @@ class Telegram:
             raise UserError("Telegram attachment download failed.") from None
 
     async def send(self, message: dict, answer: Answer):
-        base = {
-            "chat_id": message["chat"]["id"],
-            "reply_parameters": {
+        if answer.silent:
+            return
+        base = {"chat_id": message["chat"]["id"]}
+        if message.get("message_id"):
+            base["reply_parameters"] = {
                 "message_id": message["message_id"],
                 "allow_sending_without_reply": True,
-            },
-        }
+            }
         if message.get("message_thread_id"):
             base["message_thread_id"] = message["message_thread_id"]
-        # Documents preserve original quality and PNG alpha/transparency.
+
+        def remember(result):
+            if self.on_sent and isinstance(result, dict):
+                self.on_sent(
+                    {
+                        "chat": message["chat"],
+                        "message_thread_id": message.get("message_thread_id", 0),
+                        **result,
+                    }
+                )
+
+        chunks = [
+            chunk for text in (answer.messages or [answer.text]) for chunk in telegram_chunks(text)
+        ]
+        for index, chunk in enumerate(chunks):
+            try:
+                result = await self.call("sendMessage", {**base, **chunk})
+            except TelegramFormattingError:
+                result = await self.call("sendMessage", {**base, "text": chunk["text"]})
+            remember(result)
+            if index + 1 < len(chunks):
+                await asyncio.sleep(1)
         for media in answer.media:
             fields = {k: json.dumps(v) if isinstance(v, dict) else str(v) for k, v in base.items()}
-            await self.call(
-                "sendDocument", fields, files={"document": (media.name, media.data, media.mime)}
-            )
-        for offset in range(0, len(answer.text), 2000):
-            await self.call("sendMessage", {**base, "text": answer.text[offset : offset + 2000]})
-            if offset + 2000 < len(answer.text):
-                await asyncio.sleep(1)
+            photo = self.image_delivery == "photo" and len(media.data) <= 10 * 1024 * 1024
+            method, field = ("sendPhoto", "photo") if photo else ("sendDocument", "document")
+            try:
+                result = await self.call(
+                    method, fields, files={field: (media.name, media.data, media.mime)}
+                )
+            except TelegramPhotoError:
+                result = await self.call(
+                    "sendDocument", fields, files={"document": (media.name, media.data, media.mime)}
+                )
+            remember(result)
 
 
 class BotService:
@@ -110,9 +172,43 @@ class BotService:
 
     async def poll(self):
         settings = self.store.settings()
-        telegram = Telegram(settings.bot_token, self.client)
+
+        def remember_sent(message):
+            if self.store.allowed(message["chat"], self.store.settings()):
+                self.store.remember(message, is_bot=True)
+
+        telegram = Telegram(
+            settings.bot_token,
+            self.client,
+            image_delivery=settings.image_delivery,
+            on_sent=remember_sent,
+        )
         offset_key = "offset:" + hashlib.sha256(settings.bot_token.encode()).hexdigest()[:16]
         offset = int(self.store.state(offset_key, "0"))
+
+        async def consume(updates):
+            nonlocal offset
+            for update in updates:
+                await self.handle(update, telegram)
+                offset = update["update_id"] + 1
+                self.store.set_state(offset_key, str(offset))
+
+        async def refresh_before_delivery():
+            # Bound catch-up work; skip the draft if the backlog is still growing.
+            for _ in range(3):
+                updates = await telegram.call(
+                    "getUpdates",
+                    {
+                        "offset": offset,
+                        "timeout": 0,
+                        "allowed_updates": ["message", "channel_post", "my_chat_member"],
+                    },
+                )
+                if not updates:
+                    return True
+                await consume(updates)
+            return False
+
         try:
             self.identity = await telegram.call("getMe")
             webhook = await telegram.call("getWebhookInfo")
@@ -132,10 +228,9 @@ class BotService:
                         },
                     )
                     self.status, self.error = "running", ""
-                    for update in updates:
-                        await self.handle(update, telegram)
-                        offset = update["update_id"] + 1
-                        self.store.set_state(offset_key, str(offset))
+                    await consume(updates)
+                    if not updates:
+                        await self.proactive(telegram, before_delivery=refresh_before_delivery)
                 except UserError as exc:
                     self.status, self.error = "reconnecting", str(exc)
                     await asyncio.sleep(5)
@@ -152,6 +247,9 @@ class BotService:
         if member := update.get("my_chat_member"):
             chat = member["chat"]
             self.store.observe_chat(chat)
+            if member["new_chat_member"]["status"] in {"left", "kicked"}:
+                self.store.forget_chat(chat["id"])
+                return
             if (
                 member["new_chat_member"]["status"] in {"member", "administrator"}
                 and chat["type"] != "private"
@@ -164,17 +262,22 @@ class BotService:
                 )
             return
         message = update.get("message") or update.get("channel_post")
-        if not message or message.get("from", {}).get("is_bot"):
+        if not message or (
+            message.get("from", {}).get("is_bot") and not message.get("sender_chat")
+        ):
             return
         username, bot_id = self.identity["username"], self.identity["id"]
-        # Only the NEW message can activate the bot. Quoted mentions never activate it.
-        if not mention_spans(message, username, bot_id):
-            return
+        tagged = bool(mention_spans(message, username, bot_id))
         chat = message["chat"]
         self.store.observe_chat(chat)
         title = chat.get("title") or chat.get("first_name") or str(chat["id"])
         if not self.store.allowed(chat, settings):
-            self.store.log(title, "blocked", "Mention ignored: chat access is disabled")
+            if tagged:
+                self.store.log(title, "blocked", "Mention ignored: chat access is disabled")
+            return
+        self.store.remember(message)
+        self.store.prune_history(settings, time.time())
+        if not tagged:
             return
         now = time.monotonic()
         self.cooldowns = {key: expiry for key, expiry in self.cooldowns.items() if expiry > now}
@@ -190,6 +293,7 @@ class BotService:
                 prompt_text(message, username, bot_id),
                 reply.get("text") or reply.get("caption") or "",
             )
+            self.add_context(prompt, message, telegram)
             all_attachments = attachments(reply) + attachments(message)
             for attachment in all_attachments:
                 prompt.media.append(
@@ -209,6 +313,8 @@ class BotService:
                     },
                 )
             answer = await Agent(settings, self.client).run(prompt)
+            if not self.store.allowed(chat, self.store.settings()):
+                return
             await telegram.send(message, answer)
             self.store.log(
                 title,
@@ -223,5 +329,166 @@ class BotService:
                 else "Unexpected error while processing this request."
             )
             self.store.log(title, "error", detail, time.monotonic() - started)
-            with suppress(UserError):
-                await telegram.send(message, Answer(text=detail))
+            if self.store.allowed(chat, self.store.settings()):
+                with suppress(UserError):
+                    await telegram.send(message, Answer(text=detail))
+
+    def add_context(
+        self, prompt: Prompt, message: dict, telegram: Telegram, now: float | None = None
+    ):
+        now = time.time() if now is None else now
+        chat, thread = message["chat"], message.get("message_thread_id", 0)
+        prompt.instruction += (
+            "\nCurrent conversation time: "
+            + datetime.fromtimestamp(
+                now, ZoneInfo(self.store.settings().proactive_timezone)
+            ).isoformat()
+            + ". Historical message timestamps may be older; do not assume old plans are current."
+        )
+        ceiling = message["message_id"]
+        prompt.history = self.store.history(
+            chat["id"], thread, ceiling, since=now - 3600, until=now
+        )["messages"]
+        cursor = prompt.history[0]["message_id"] if prompt.history else ceiling
+
+        def check_access():
+            settings = self.store.settings()
+            if not self.store.allowed(chat, settings):
+                raise UserError("Access to this conversation was revoked.")
+            self.store.prune_history(settings, time.time())
+            return settings
+
+        def read_history(before: int | None, limit: int):
+            nonlocal cursor
+            check_access()
+            page = self.store.history(
+                chat["id"], thread, min(before or cursor, ceiling), limit=limit, until=now
+            )
+            if page["next_before_message_id"] is not None:
+                cursor = page["next_before_message_id"]
+            return page
+
+        async def read_media(reference: str):
+            settings = check_access()
+            try:
+                prefix, ref_chat, ref_thread, ref_message = reference.split(":")
+                ref_id = int(ref_message)
+                valid = (
+                    prefix == "telegram"
+                    and int(ref_chat) == chat["id"]
+                    and int(ref_thread) == thread
+                    and 0 < ref_id < ceiling
+                )
+            except (ValueError, TypeError):
+                valid = False
+            if not valid:
+                raise UserError("Media reference must belong to this conversation's history.")
+            attachment = self.store.media_attachment(chat["id"], thread, ref_id)
+            if not attachment:
+                raise UserError("This media reference is unavailable or has expired.")
+            return await telegram.download(attachment, settings.max_media_mb * 1024 * 1024)
+
+        prompt.history_reader, prompt.media_reader = read_history, read_media
+
+    @staticmethod
+    def daytime(settings, now: float) -> bool:
+        hour = datetime.fromtimestamp(now, ZoneInfo(settings.proactive_timezone)).hour
+        start, end = settings.daytime_start, settings.daytime_end
+        if start < end:
+            return start <= hour < end
+        return hour >= start or hour < end if start != end else False
+
+    async def proactive(
+        self, telegram: Telegram, *, now: float | None = None, before_delivery=None
+    ):
+        now = time.time() if now is None else now
+        settings = self.store.settings()
+        self.store.prune_history(settings, now)
+        if (
+            not settings.enabled
+            or not self.daytime(settings, now)
+            or not (settings.wake_enabled or settings.participation_enabled)
+        ):
+            return
+        local = datetime.fromtimestamp(now, ZoneInfo(settings.proactive_timezone))
+        day_start = local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        for latest in self.store.conversations():
+            chat_id, thread = latest["chat_id"], latest["thread_id"]
+            chat = {"id": chat_id, "type": latest["kind"], "title": latest["title"]}
+            if chat["type"] not in {"group", "supergroup"} or not self.store.allowed(
+                chat, settings
+            ):
+                continue  # Automatic participation is for allowed group conversations.
+            if not self.store.proactive_available(chat_id, now, day_start, settings):
+                continue
+            silence = now - latest["sent_at"]
+            human = latest["human_id"]
+            if not human:
+                continue
+            if settings.wake_enabled and silence >= settings.wake_after_hours * 3600:
+                kind, instruction, anchor = "wake", settings.wake_prompt, human
+            elif (
+                settings.participation_enabled
+                and not latest["is_bot"]
+                and settings.participation_delay_minutes * 60 <= silence <= 3600
+            ):
+                counts = self.store.db.execute(
+                    """SELECT COUNT(*), COUNT(DISTINCT sender_id) FROM messages
+                       WHERE chat_id=? AND thread_id=? AND is_bot=0 AND sent_at BETWEEN ? AND ?""",
+                    (chat_id, thread, now - 3600, now),
+                ).fetchone()
+                if counts[0] < 3 or counts[1] < 2:
+                    continue
+                kind, instruction, anchor = "participation", settings.participation_prompt, human
+            else:
+                continue
+            # Persist BEFORE rolling or generating: polling/restarts cannot reroll the same pause.
+            if not self.store.claim_opportunity(chat_id, thread, kind, anchor):
+                continue
+            if kind == "participation" and random.random() >= settings.participation_probability:
+                continue
+            self.store.record_proactive_attempt(chat_id, now)
+            message = {"chat": chat, "message_thread_id": thread}
+            prompt = Prompt(
+                "Consider contributing to this conversation without an explicit mention.",
+                instruction=instruction,
+                proactive=True,
+            )
+            self.add_context(
+                prompt, {**message, "message_id": latest["message_id"] + 1}, telegram, now
+            )
+            try:
+                answer = await Agent(settings, self.client).run(prompt)
+                if answer.silent:
+                    self.store.log(chat["title"], "limited", f"{kind}: chose to stay silent")
+                    continue
+                # Drain updates that arrived during inference before publishing a stale interruption.
+                if before_delivery and await before_delivery() is False:
+                    continue
+                current = self.store.settings()
+                newest = self.store.db.execute(
+                    "SELECT message_id FROM conversation_state WHERE chat_id=? AND thread_id=?",
+                    (chat_id, thread),
+                ).fetchone()
+                if (
+                    not newest
+                    or newest[0] != latest["message_id"]
+                    or not current.enabled
+                    or not self.store.allowed(chat, current)
+                    or not self.daytime(current, time.time() if before_delivery else now)
+                    or not (
+                        current.wake_enabled if kind == "wake" else current.participation_enabled
+                    )
+                ):
+                    continue
+                if kind == "participation":
+                    message["message_id"] = latest["message_id"]
+                await telegram.send(message, answer)
+                self.store.log(chat["title"], "success", f"Unprompted {kind} message")
+            except Exception as exc:  # noqa: BLE001 — isolate scheduled request failures
+                detail = (
+                    str(exc)
+                    if isinstance(exc, UserError)
+                    else "Unexpected proactive request error."
+                )
+                self.store.log(chat["title"], "error", f"{kind}: {detail}")

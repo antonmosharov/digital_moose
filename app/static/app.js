@@ -29,7 +29,7 @@ function eventHTML(event) {
 function renderActivity() {
   const filter=$('#activity-filter').value;
   const events=state.activity.filter(e=>filter==='all'||e.status===filter);
-  $('#activity-list').innerHTML=events.map(eventHTML).join('')||empty('A clean slate.','Activity will appear when your agent receives a mention.');
+  $('#activity-list').innerHTML=events.map(eventHTML).join('')||empty('A clean slate.','Mentions and optional participation appear here.');
   $('#recent-activity').innerHTML=state.activity.slice(0,3).map(eventHTML).join('')||empty('Quiet for now.','Your agent’s next conversation starts here.');
 }
 function imageModelHint() {
@@ -52,7 +52,7 @@ function render(populate=false) {
   document.body.classList.toggle('running',active);
   document.querySelectorAll('.bot-toggle').forEach(el=>{el.textContent=s.enabled?'Ⅱ Pause agent':'▶ Start agent';});
   $('#status-stat').textContent=({running:'Listening',connecting:'Connecting',reconnecting:'Reconnecting',error:'Needs attention',stopped:'Offline'})[status]||status;
-  $('.bot-status').textContent=({running:'Listening for mentions',connecting:'Connecting',reconnecting:'Reconnecting',error:'Connection error',stopped:'Agent paused'})[status]||status;
+  $('.bot-status').textContent=({running:'Listening to conversations',connecting:'Connecting',reconnecting:'Reconnecting',error:'Connection error',stopped:'Agent paused'})[status]||status;
   $('#username-stat').textContent=state.bot.username?'@'+state.bot.username:'Connect your Telegram bot to begin';
   $('#allowed-stat').textContent=allowed; $('#chat-count').textContent=allowed;
   $('#responses-stat').textContent=state.stats.responses;
@@ -123,7 +123,10 @@ $('#playground-form').addEventListener('submit',event=>{
       let result;
       if(file){const body=new FormData();body.append('file',file);body.append('prompt',text);body.append('context',context);result=await api('/playground/media',{method:'POST',body});}
       else result=await api('/playground',{method:'POST',body:JSON.stringify({text,context})});
-      const output=$('#playground-output');output.textContent=result.text;
+      const output=$('#playground-output');output.textContent='';
+      for(const text of (result.messages || [result.text])) {
+        const bubble=document.createElement('p');bubble.textContent=text;output.append(bubble);
+      }
       for(const [index,url] of result.images.entries()) {
         const image=document.createElement('img');image.src=url;image.alt='Generated image '+(index+1);output.append(image);
         const link=document.createElement('a');link.href=url;link.download='moose-result-'+(index+1);link.textContent='Download original ↗';output.append(link);

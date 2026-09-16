@@ -1,6 +1,6 @@
 # Digital Moose
 
-A Telegram AI agent that responds **only when explicitly @mentioned**, with a web control room. Built with Python, FastAPI, SQLite, and an OpenAI-compatible Chat Completions client. No frontend build step is needed.
+A Telegram AI agent with conversation memory, replies to **explicit @mentions**, and configurable, occasional participation in group conversations, with a web control room. Built with Python, FastAPI, SQLite, and an OpenAI-compatible Chat Completions client. No frontend build step is needed.
 
 ## Run locally
 
@@ -14,11 +14,12 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers
 Open **http://127.0.0.1:8000**. The dashboard works before you supply credentials; AI calls and Telegram polling need real credentials.
 
 1. Create a bot with [@BotFather](https://t.me/BotFather). Save its token in **Connections**.
-2. For ordinary group mentions, use BotFather's `/setprivacy` → Disable, then remove and re-add the bot, or make it a group admin. [Telegram's delivery rules](https://core.telegram.org/bots/faq#what-messages-will-my-bot-get) explain this requirement. The application still discards unmentioned messages.
+2. For ordinary group mentions, use BotFather's `/setprivacy` → Disable, then remove and re-add the bot, or make it a group admin. [Telegram's delivery rules](https://core.telegram.org/bots/faq#what-messages-will-my-bot-get) explain this requirement. The application stores messages it observes in allowed chats, including unmentioned messages, to provide conversation context. Telegram does not offer arbitrary history backfill through the Bot API.
 3. Save an API base URL, API key, and model ID. OpenRouter's base URL is `https://openrouter.ai/api/v1`; use the exact model ID from your provider. Test the saved connections.
 4. In **Connected chats**, allow each group/channel ID *before* inviting the bot. IDs are negative, often starting with `-100`. To discover an unknown ID, invite the bot once: the membership update records the chat and the bot leaves it by default. Allow the observed chat and invite it again. You can instead temporarily disable automatic leaving in Agent settings; unapproved chats still cannot receive AI replies.
-5. Optionally set an image-output model in **Agent settings** and test it in **Playground**. The chat model needs tool calling, plus vision for image inputs. The image model needs both image input and output for editing.
-6. Click **Start agent**. Use one running application process per bot token.
+5. In **Agent settings**, configure conversation memory, daytime hours and timezone, wake-up messages, and occasional participation. Unprompted participation applies only to allowed groups; private chats and channels still require mentions. Both group participation modes are enabled by default when the agent runs.
+6. Optionally set an image-output model in **Agent settings** and test it in **Playground**. The chat model needs tool calling for history/media retrieval and image generation, plus vision for image inputs. The image model needs both image input and output for editing.
+7. Click **Start agent**. Use one running application process per bot token.
 
 ## Behavior
 
@@ -30,19 +31,19 @@ Open **http://127.0.0.1:8000**. The dashboard works before you supply credential
 | Photo with caption `@your_bot describe this` | Uses the photo and caption. |
 | Photo with caption `@your_bot` | Uses a default instruction to interpret the media. |
 | Reply to media with just `@your_bot` | Interprets the original media. |
-| Unmentioned text/media, or an unmentioned reply to the bot | Ignored, including in private chats. |
-| A quoted original message contains `@your_bot`, but the new reply does not | Ignored. |
+| Unmentioned text/media in an allowed chat | Stored as conversation context; no immediate response. Eligible group pauses may trigger optional participation. |
+| A quoted original message contains `@your_bot`, but the new reply does not | Does not count as a mention; stored as context. |
 
-Mention detection uses Telegram entities with UTF-16 offsets, exact usernames, and case-insensitive matching. Code spans, partial usernames, `/commands`, edited messages, and messages from bots do not activate the agent. Text mentions by bot ID also work. An entirely uncaptioned, unmentioned media upload cannot activate it; mention the bot in its caption or in a reply.
+Mention detection uses Telegram entities with UTF-16 offsets, exact usernames, and case-insensitive matching. Code spans, partial usernames, `/commands`, edited messages, and messages from bots do not activate the agent. Text mentions by bot ID also work. An entirely uncaptioned, unmentioned media upload does not trigger an immediate reply; mention the bot in its caption or in a reply.
 
-Replies stay in the original forum topic. Long text is split into Telegram-safe chunks and sent as plain text. Images are sent as documents to preserve original bytes and transparency. The agent can return text, images, or both. Background removal quality and genuine transparency depend on the chosen image model.
+Replies stay in the original forum topic. Model Markdown is converted into Telegram formatting: bold, italic, strikethrough, clickable links, inline code, and fenced code blocks. Headings become bold text; lists and quotes use readable prefixes. Raw HTML remains literal text. Long replies are split with Unicode-safe formatting offsets. If Telegram explicitly rejects formatting, that chunk is retried as readable plain text. Generated images are sent as **inline photos** after the text reply. Telegram may compress photos and remove transparency. Select **Original file** delivery to preserve the original bytes and alpha channel. Images larger than the photo upload limit, or explicitly rejected as unsupported photos, fall back to document delivery; connectivity and permission errors are not retried as documents. The agent can return text, images, or both. Background removal quality and genuine transparency depend on the chosen image model.
 
 ## Media and agent tools
 
 - Image input: JPEG, PNG, WebP, GIF.
 - PDF and UTF-8 text files (text files up to 200 KB).
 - Voice/audio and video use provider-specific multimodal Chat Completions content blocks. The selected provider/model must support the media type and codec; the app does not transcode media.
-- The `create_or_edit_image` tool runs in a bounded tool-call loop and passes attached images to the image model. It receives only the current request and replied-to message; there is no ambient chat history, arbitrary code execution, or web browsing tool.
+- The `create_or_edit_image` tool runs in a bounded tool-call loop and passes attached images to the image model. It can use attachments in the current request/reply and images explicitly fetched from stored history. There is no arbitrary code execution or web browsing tool.
 - Multimodal chat image mode uses `modalities: ["image", "text"]` and expects base64 images in `message.images` (or image content blocks). Choose a compatible provider/model. The alternative `/images/generations` mode supports generation only, with `b64_json` responses; it does not support edits.
 - Remote image URL outputs are deliberately unsupported; request a provider that returns base64. This avoids fetching model-supplied URLs from the server.
 - SVG/vector output is unsupported. Recraft vector models are rejected before generation; Recraft Styles additionally requires a style-reference image and is not a general editing model. For ordinary generation and edits, choose a raster image model (for example, `google/gemini-2.5-flash-image` in multimodal chat mode).
@@ -51,6 +52,35 @@ Replies stay in the original forum topic. Long text is split into Telegram-safe 
 - There is no generated audio/video output tool; output media currently means generated/edited images. Audio/video inputs depend on model support.
 
 Provider references: [image inputs](https://openrouter.ai/docs/guides/overview/multimodal/image-understanding), [audio inputs](https://openrouter.ai/docs/guides/overview/multimodal/audio), [PDF inputs](https://openrouter.ai/docs/guides/overview/multimodal/pdfs), and [Chat Completions](https://openrouter.ai/docs/api/api-reference/chat/send-chat-completion-request).
+
+## Conversation memory and media lookup
+
+For every mention, the bot includes the **10 previous messages in the same chat and forum topic**, excluding messages older than **one hour**. Entries identify the sender, timestamp, text/caption, reply target, and a `telegram:chat:topic:message` reference. The triggering message is provided separately. The bot records its own successfully delivered replies too, including each text bubble and image. Other bots and service events do not trigger replies.
+
+Historical media is represented by its type, filename, and message reference, never its bytes. Two bounded tools let the model request more context:
+
+- `get_previous_messages`: read older retained messages, default 20 and maximum 50 per call. Omitting `before_message_id` advances backward from the initial context or last page; supplying it selects a cursor. Responses include a next cursor and `has_more`. The one-hour filter applies only to automatic context, not this tool. Default budget: **5 calls per request**.
+- `get_message_media`: fetch an attachment using its history reference. The bot checks chat/topic access and the request's history boundary, downloads within the configured per-file size limit, then provides the actual content to the model. Retrieved images also become available to the image-editing tool. Default budget: **3 calls per request**. Duplicate fetches are cached within the request. Expired/unavailable files return a tool error.
+
+Both budgets are configurable, and zero disables the respective tool. Invalid calls consume budget; the total loop is bounded with a final completion. History never crosses chats or topics. Individual history entries are limited to 4,000 characters when sent to the model (with an explicit truncation marker). Storage retention is configurable from 3 to 3,650 days. Only messages observed while the bot has access are available; Telegram does not provide full past conversation history to bots. Revoked access prevents subsequent history/media queries. History does not currently synchronize message edits or deletions.
+
+## Natural replies and optional participation
+
+**Multiple replies and memes:** by default, 25% of triggered requests permit the model to send up to three short text messages, followed by any generated images. This is an opportunity, not a requirement: the model chooses whether a split or an unsolicited, relevant meme is appropriate. Code draws the probability and caps the number of text bubbles; a supplemental system instruction controls tone and relevance. Set the probability to zero to disable this behavior. Telegram's mandatory length-based splitting still applies to long text. Unprompted participation stays to one short text reply and cannot generate images.
+
+**Wake-up:** after 48 hours of silence, send one optional friendly message during daytime. The separate wake-up prompt can ask for a joke, greeting, or continuation of an older conversation through the history tool. After that attempt, the bot waits for a new human message before another wake-up; it never keeps waking an unanswered chat. Silence includes the bot's own messages. Timing metadata survives content retention expiry.
+
+**Occasional participation:** after five minutes of silence, draw one 5% probability check for that pause. Eligibility requires at least three human messages from two distinct senders in the preceding hour, with a human speaking last. Pauses older than an hour are not considered for this mode. A failed draw is persisted and never retried until another human message creates a new pause. If selected, the model can still return `[[SILENT]]` when it has nothing useful to add.
+
+Both modes:
+
+- Apply only to allowed groups/supergroups while the agent is running. They are individually configurable and enabled by default.
+- Use backend settings `proactive_timezone`, `daytime_start`, and `daytime_end`; defaults are **Asia/Dubai, 09:00–21:00**, with the end hour excluded. Overnight windows work and daylight-saving changes follow the selected IANA timezone. Edit these in **Agent settings** or `PATCH /api/settings`.
+- Share a default **six-hour cooldown** and **two attempts per local calendar day**, across all topics in a group. Selected attempts count even if the model declines, fails, or a draft is discarded; failed probability draws do not count. These limits are configurable.
+- Persist opportunity checks and budgets across restarts. Before delivery, pending Telegram updates are processed; if the topic changed during generation, the draft is discarded. Access, enable switches, and daytime hours are checked again.
+- Keep proactive errors in dashboard activity rather than sending error messages to the group.
+
+The poll loop evaluates opportunities after catching up with Telegram updates (normally within about 25 seconds of an eligible pause, plus inference time). Prompts and media queries still use your configured AI provider and incur its normal usage costs.
 
 ## Configuration and security
 
@@ -63,7 +93,7 @@ ADMIN_PASSWORD='choose-a-strong-password' ALLOWED_HOSTS='moose.example.com' \
   uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers
 ```
 
-`DATA_DIR` changes storage location. Local uvicorn does not automatically load `.env`; export variables or pass `--env-file .env`. Chat titles, IDs, and the latest 1,000 metadata events are stored locally; prompt text and media are not logged or retained. The dashboard shows the latest 100 events. Explicitly tagged content and replied-to attachments are sent to your configured AI provider.
+`DATA_DIR` changes storage location. Local uvicorn does not automatically load `.env`; export variables or pass `--env-file .env`. Chat titles, IDs, scheduling state, and the latest 1,000 metadata events are stored locally. Conversation text, sender names, and Telegram attachment metadata/file IDs are encrypted using the same local key as settings and retained for 90 days by default. **Unmentioned messages in allowed chats are included.** Media bytes are never retained. Revoking chat access deletes its history and scheduling state; disabling private chats deletes stored private history. The dashboard shows the latest 100 activity events without message text. Recent history, queried history, and explicitly attached or fetched media are sent to your configured AI provider. Keep both the database and encryption key private; they are backed up together.
 
 The polling worker processes requests sequentially, applies a per-sender cooldown, retries Telegram rate limits, and persists its polling offset. Use this for small teams; large deployments need a durable work queue and per-chat scheduling. Delivery is **at least once**: a crash after Telegram delivery and before offset persistence can duplicate a reply. Restarting or saving settings cancels an in-flight request, which can be retried at restart. Existing Telegram webhooks are detected and reported, never automatically deleted. Remove an existing webhook explicitly before using this polling service.
 

@@ -1,6 +1,7 @@
 import asyncio
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -131,6 +132,11 @@ def create_app(data_dir: str | None = None):
                 400, "Set the bot token, AI API key, and chat model before starting"
             )
         store.save_settings(updated)
+        if not updated.allow_private:
+            for chat in store.chats():
+                if chat["kind"] == "private":
+                    store.forget_chat(chat["id"])
+        store.prune_history(updated, time.time())
         await request.app.state.bot.restart()
         return store.public_settings()
 
@@ -183,6 +189,7 @@ def create_app(data_dir: str | None = None):
             )
         return {
             "text": answer.text,
+            "messages": answer.messages or ([answer.text] if answer.text else []),
             "images": [m.data_url() for m in answer.media],
             "tool_calls": answer.tool_calls,
         }
@@ -218,6 +225,7 @@ def create_app(data_dir: str | None = None):
             )
         return {
             "text": answer.text,
+            "messages": answer.messages or ([answer.text] if answer.text else []),
             "images": [m.data_url() for m in answer.media],
             "tool_calls": answer.tool_calls,
         }

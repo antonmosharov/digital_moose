@@ -2,7 +2,7 @@ services:
   moose:
     build: .
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8000:80"
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env for Docker}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}

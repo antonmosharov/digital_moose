@@ -297,17 +297,18 @@ async def test_image_failure_is_logged_as_error(store):
     assert "provider rejected" in telegram.send.call_args.args[1].text
 
 
-async def test_media_delivery_preserves_threads_and_transparency():
+async def test_media_delivery_sends_inline_photo_in_original_thread():
     telegram = Telegram("token", AsyncMock())
     telegram.call = AsyncMock()
     await telegram.send(
         message(message_thread_id=10), Answer("Done", [Media("result.png", "image/png", b"png")])
     )
     calls = telegram.call.call_args_list
-    assert calls[0].args[0] == "sendDocument"
-    assert calls[0].args[1]["message_thread_id"] == "10"
-    assert json.loads(calls[0].args[1]["reply_parameters"])["message_id"] == 9
-    assert calls[1].args[1]["message_thread_id"] == 10
+    assert calls[0].args[0] == "sendMessage"
+    assert calls[0].args[1]["message_thread_id"] == 10
+    assert calls[1].args[0] == "sendPhoto"
+    assert calls[1].args[1]["message_thread_id"] == "10"
+    assert json.loads(calls[1].args[1]["reply_parameters"])["message_id"] == 9
 
 
 async def test_download_limit_is_enforced_on_stream():
