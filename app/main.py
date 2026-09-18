@@ -16,6 +16,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agent import Agent
 from app.config import Settings
+from app.consciousness import PREFILL_KEY, prefill_consciousness
 from app.prompts import Media, Prompt, UserError
 from app.store import Store
 from app.telegram import BotService, Telegram
@@ -32,6 +33,7 @@ def create_app(data_dir: str | None = None):
             app.state.store, app.state.client = store, client
             app.state.bot = BotService(store, client)
             app.state.playground_lock = asyncio.Lock()
+            app.state.consciousness_prefill_lock = asyncio.Lock()
             await app.state.bot.restart()
             yield
             await app.state.bot.stop()
@@ -102,6 +104,10 @@ def create_app(data_dir: str | None = None):
         activity = store.activity()
         return {
             "settings": store.public_settings(),
+            "consciousness_prefill": {
+                "completed": bool(store.state(PREFILL_KEY)),
+                "running": request.app.state.consciousness_prefill_lock.locked(),
+            },
             "chats": store.chats(),
             "activity": activity,
             "bot": {
@@ -149,6 +155,14 @@ def create_app(data_dir: str | None = None):
         store.prune_history(updated, time.time())
         await request.app.state.bot.restart()
         return store.public_settings()
+
+    @app.post("/api/consciousness/prefill")
+    async def prefill(request: Request):
+        lock = request.app.state.consciousness_prefill_lock
+        if lock.locked():
+            raise HTTPException(409, "Consciousness initialization is already running.")
+        async with lock:
+            return await prefill_consciousness(request.app.state.store, request.app.state.client)
 
     class ChatInput(BaseModel):
         id: int

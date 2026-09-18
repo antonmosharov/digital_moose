@@ -76,6 +76,8 @@ def main():
                 page.get_by_role("button", name="Revoke access").click()
                 page.locator(".chat-toggle").filter(has_text="Allow chat").wait_for()
                 page.locator('nav a[href="#agent"]').click()
+                page.get_by_role("button", name="Initialize from conversation history").click()
+                expect(page.locator("#toast")).to_contain_text("No retained conversation text")
                 page.locator('[name="system_prompt"]').fill("Test system prompt")
                 page.locator('[name="agent_names"]').fill("moose, лось, лосик")
                 page.locator('[name="name_mention_probability"]').fill("0.65")
@@ -99,6 +101,7 @@ def main():
                 expect(page.locator('[name="name_mention_probability"]')).to_have_value("0.65")
                 expect(page.locator('[name="natural_reply_min_context"]')).to_have_value("150")
                 expect(page.locator('[name="consciousness"]')).to_have_value("Friends enjoy tea.")
+                expect(page.locator("#prefill-consciousness")).to_be_disabled()
                 expect(page.locator('[name="consciousness_prompt"]')).to_have_value(
                     "Remember useful reflections."
                 )

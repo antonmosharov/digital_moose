@@ -2,6 +2,7 @@ const $ = (selector) => document.querySelector(selector);
 let state;
 let toastTimer;
 let formSettings = {};
+let prefillRunning = false;
 const names = {overview:'Overview',playground:'Playground',chats:'Connected chats',activity:'Activity',connection:'Connections',agent:'Agent settings'};
 const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 
@@ -81,6 +82,12 @@ function render(populate=false) {
     $('#api-key-hint').textContent=s.has_api_key?'API key saved. Leave blank to keep it.':'No API key saved yet.';
     imageModelHint();
   }
+  const prefill=state.consciousness_prefill || {};
+  $('#prefill-consciousness').disabled=prefillRunning || prefill.running || prefill.completed || !!s.consciousness.trim();
+  if(prefillRunning || prefill.running) $('#prefill-status').textContent='Analyzing conversation history… Large histories may take several minutes. The result will be saved automatically.';
+  else if(prefill.completed) $('#prefill-status').textContent='History initialization completed. You and the agent can continue editing consciousness normally.';
+  else if(s.consciousness.trim()) $('#prefill-status').textContent='Consciousness already contains memory. Initialization will not overwrite it.';
+  else $('#prefill-status').textContent='One-time analysis of retained text in allowed chats, using your saved personality and guidance. Uses the configured AI provider and saves automatically. Available only while consciousness is empty.';
 }
 async function refresh(populate=false) {state=await api('/state');render(populate);}
 async function busy(button, fn) {
@@ -106,6 +113,18 @@ for(const id of ['connection-form','agent-form']) $('#'+id).addEventListener('su
     await refresh(true);toast('Settings saved.');
   });
 });
+$('#prefill-consciousness').addEventListener('click',event=>busy(event.currentTarget,async()=>{
+  const form=$('#agent-form');
+  if(['consciousness','system_prompt','consciousness_prompt'].some(key=>form.elements[key].value!==formSettings[key])) {
+    throw new Error('Save your personality, consciousness, and guidance edits before initializing.');
+  }
+  prefillRunning=true;render();
+  try {
+    const result=await api('/consciousness/prefill',{method:'POST'});
+    await refresh();
+    toast(`Consciousness initialized from ${result.batches} history batch(es).`);
+  } finally {prefillRunning=false;}
+}));
 $('.bot-toggle').addEventListener('click',event=>busy(event.currentTarget,async()=>{
   await api('/settings',{method:'PATCH',body:JSON.stringify({enabled:!state.settings.enabled})});await refresh();
 }));

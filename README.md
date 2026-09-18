@@ -60,6 +60,18 @@ newer memories. Clearing the field clears memory. Revoking chat access deletes s
 chat history but does not remove reflections from the shared consciousness; those can
 be revised separately in the dashboard.
 
+To seed initially empty consciousness, save your personality and consciousness guidance,
+then click **Initialize from conversation history** in the Consciousness card. This
+one-time action analyzes all retained text/captions in currently allowed chats (including
+private chats only when enabled), in chronological batches through the configured AI
+provider. It does not download attachments. Each batch refines a compact draft with
+chat, participant, and timestamp context. Large histories require multiple model calls
+and may take several minutes. Max response tokens controls the draft output budget.
+Only the completed analysis is saved; failures and concurrent memory/personality/access
+changes leave existing memory untouched and allow retry. A persistent completion marker
+prevents rerunning the action even if consciousness is later cleared. Normal admin and
+agent memory editing remains available. The API action is `POST /api/consciousness/prefill`.
+
 | Incoming message | Behavior |
 | --- | --- |
 | `@your_bot explain the term flexible` | Uses the remaining text as the prompt. |
