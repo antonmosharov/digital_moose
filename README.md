@@ -23,6 +23,43 @@ Open **http://127.0.0.1:8000**. The dashboard works before you supply credential
 
 ## Behavior
 
+### Names and consciousness
+
+In **Agent settings → Replies when named**, enter a comma-separated string such as
+`moose, лось, лосик, лосёнок`. Matching uses whole words, ignores case, and treats
+`ё` and `е` alike. We inspect the latest 10 messages within the last hour in the
+same chat/topic. When any human message or caption in that window contains a name,
+the **Chance when named** replaces the general participation probability (defaults:
+50% versus 5%). A named message qualifies on its own; ordinary participation still
+requires three messages from two people. Occasional participation must be enabled.
+**Natural reply minimum context** defaults to 100 characters. Both ordinary and
+name-triggered participation require at least this much combined text/caption content
+from that same window, after trimming surrounding whitespace from each message.
+Sender names, metadata, and attachment descriptions do not count. Set it to zero to
+disable the minimum. Short context is skipped before rolling the probability or
+calling the AI, without consuming an attempt. This does not affect explicit tags or
+the separate quiet-chat wake-up mode.
+Both use the configured pause, daytime window, cooldown, daily limits, and one roll
+per pause. The model can still stay silent. Explicit @tags retain direct-reply behavior.
+An empty names string disables matching; a name probability of zero skips named pauses.
+
+**Consciousness** is editable persistent text, encrypted with the other settings and
+included alongside the system prompt on every request. It is shared across chats and
+the playground. **Consciousness guidance** explains how the agent should use it for
+observations, preferences, beliefs, highlights, and reflections. The agent can call
+`read_consciousness` and `write_consciousness` during direct replies, proactive turns,
+and playground requests, with up to three calls to each tool per request. It cannot
+run outside those requests. Writes replace the complete text (up to 50,000 characters)
+and require the previous text to avoid overwriting concurrent revisions. After a
+conflict, the agent must read again and merge. Successful writes immediately update
+the current request's system context and persist for future requests and restarts.
+
+The dashboard refreshes consciousness when it has no unsaved edits and sends only
+changed settings. Conflicting consciousness edits return an error instead of replacing
+newer memories. Clearing the field clears memory. Revoking chat access deletes stored
+chat history but does not remove reflections from the shared consciousness; those can
+be revised separately in the dashboard.
+
 | Incoming message | Behavior |
 | --- | --- |
 | `@your_bot explain the term flexible` | Uses the remaining text as the prompt. |

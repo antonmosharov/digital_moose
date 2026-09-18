@@ -1,6 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
 let state;
 let toastTimer;
+let formSettings = {};
 const names = {overview:'Overview',playground:'Playground',chats:'Connected chats',activity:'Activity',connection:'Connections',agent:'Agent settings'};
 const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 
@@ -46,6 +47,11 @@ function imageModelHint() {
 }
 function render(populate=false) {
   const s=state.settings;
+  const memory=$('#agent-form [name="consciousness"]');
+  if(!populate && memory.value===formSettings.consciousness) {
+    memory.value=s.consciousness;
+    formSettings.consciousness=s.consciousness;
+  }
   const allowed=state.chats.filter(c=>c.allowed).length;
   const status=state.bot.status;
   const active=['running','connecting','reconnecting'].includes(status);
@@ -66,6 +72,7 @@ function render(populate=false) {
   }).join('')||empty('Your agent is waiting for an invitation.','Allow a group or channel using its Telegram chat ID.');
   renderActivity();
   if(populate) {
+    formSettings={...s};
     for(const form of [$('#connection-form'),$('#agent-form')]) for(const element of form.elements) {
       if(!element.name||!(element.name in s)) continue;
       if(element.type==='checkbox') element.checked=s[element.name]; else element.value=s[element.name];
@@ -92,7 +99,9 @@ function values(form) {
 for(const id of ['connection-form','agent-form']) $('#'+id).addEventListener('submit',event=>{
   event.preventDefault();const form=event.currentTarget;
   busy(form.querySelector('[type=submit]'),async()=>{
-    await api('/settings',{method:'PATCH',body:JSON.stringify(values(form))});
+    const changed=Object.fromEntries(Object.entries(values(form)).filter(([key,value])=>value!==formSettings[key]));
+    if(Object.hasOwn(changed,'consciousness')) changed.consciousness_previous=formSettings.consciousness;
+    await api('/settings',{method:'PATCH',body:JSON.stringify(changed)});
     if(id==='connection-form'){form.elements.bot_token.value='';form.elements.api_key.value='';}
     await refresh(true);toast('Settings saved.');
   });

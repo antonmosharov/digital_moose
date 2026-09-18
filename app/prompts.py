@@ -1,12 +1,22 @@
 import base64
 import json
 import mimetypes
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 
 class UserError(Exception):
     """A safe, actionable error that can be shown to users."""
+
+
+def contains_agent_name(text: str, names: str) -> bool:
+    text = text.casefold().replace("ё", "е")
+    return any(
+        re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", text)
+        for value in names.split(",")
+        if (name := value.strip().casefold().replace("ё", "е"))
+    )
 
 
 def utf16_slice(text: str, offset: int, length: int) -> str:

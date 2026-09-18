@@ -77,6 +77,18 @@ class Store:
             settings[f"has_{key}"] = bool(settings.pop(key))
         return settings
 
+    def read_consciousness(self) -> str:
+        return self.settings().consciousness
+
+    def write_consciousness(self, content: str, previous: str) -> bool:
+        # Synchronous read/check/write: no request can interleave on the event loop.
+        settings = self.settings()
+        if settings.consciousness != previous:
+            return False
+        updated = Settings.model_validate({**settings.model_dump(), "consciousness": content})
+        self.save_settings(updated)
+        return True
+
     def observe_chat(self, chat: dict):
         self.db.execute(
             """INSERT INTO chats VALUES (?, ?, ?, 0, ?)
@@ -183,6 +195,21 @@ class Store:
             return None
         items = json.loads(self.cipher.decrypt(row[0])).get("attachments", [])
         return items[0] if items else None
+
+    def participation_context(self, chat_id: int, thread_id: int, now: float) -> list[dict]:
+        rows = self.db.execute(
+            """SELECT value, is_bot FROM messages
+               WHERE chat_id=? AND thread_id=? AND sent_at BETWEEN ? AND ?
+               ORDER BY message_id DESC LIMIT 10""",
+            (chat_id, thread_id, now - 3600, now),
+        ).fetchall()
+        return [
+            {
+                "text": json.loads(self.cipher.decrypt(row["value"]))["text"],
+                "is_bot": bool(row["is_bot"]),
+            }
+            for row in reversed(rows)
+        ]
 
     def history(
         self,

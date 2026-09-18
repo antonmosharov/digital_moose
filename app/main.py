@@ -118,6 +118,16 @@ def create_app(data_dir: str | None = None):
     @app.patch("/api/settings")
     async def settings(request: Request, patch: dict):
         store = request.app.state.store
+        patch = dict(patch)
+        previous = patch.pop("consciousness_previous", None)
+        if (
+            "consciousness" in patch
+            and previous is not None
+            and previous != store.read_consciousness()
+        ):
+            raise HTTPException(
+                409, "Consciousness changed. Reload the page and merge your edits before saving."
+            )
         try:
             current = store.settings().model_dump()
             current.update(patch)
@@ -184,9 +194,11 @@ def create_app(data_dir: str | None = None):
         if not text.strip() and not context.strip():
             raise HTTPException(400, "Enter a prompt or reply context")
         async with request.app.state.playground_lock:
-            answer = await Agent(request.app.state.store.settings(), request.app.state.client).run(
-                Prompt(text, context)
-            )
+            answer = await Agent(
+                request.app.state.store.settings(),
+                request.app.state.client,
+                request.app.state.store,
+            ).run(Prompt(text, context))
         return {
             "text": answer.text,
             "messages": answer.messages or ([answer.text] if answer.text else []),
@@ -210,7 +222,7 @@ def create_app(data_dir: str | None = None):
         if len(prompt) + len(context) > 20000:
             raise HTTPException(400, "Prompt is too long")
         async with request.app.state.playground_lock:
-            answer = await Agent(settings, request.app.state.client).run(
+            answer = await Agent(settings, request.app.state.client, request.app.state.store).run(
                 Prompt(
                     prompt,
                     context,

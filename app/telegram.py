@@ -11,7 +11,15 @@ import httpx
 
 from app.agent import Agent, Answer
 from app.formatting import telegram_chunks
-from app.prompts import Media, Prompt, UserError, attachments, mention_spans, prompt_text
+from app.prompts import (
+    Media,
+    Prompt,
+    UserError,
+    attachments,
+    contains_agent_name,
+    mention_spans,
+    prompt_text,
+)
 from app.store import Store
 
 
@@ -312,7 +320,7 @@ class BotService:
                         ),
                     },
                 )
-            answer = await Agent(settings, self.client).run(prompt)
+            answer = await Agent(settings, self.client, self.store).run(prompt)
             if not self.store.allowed(chat, self.store.settings()):
                 return
             await telegram.send(message, answer)
@@ -423,6 +431,7 @@ class BotService:
                 continue
             silence = now - latest["sent_at"]
             human = latest["human_id"]
+            probability = settings.participation_probability
             if not human:
                 continue
             if settings.wake_enabled and silence >= settings.wake_after_hours * 3600:
@@ -432,20 +441,32 @@ class BotService:
                 and not latest["is_bot"]
                 and settings.participation_delay_minutes * 60 <= silence <= 3600
             ):
+                context = self.store.participation_context(chat_id, thread, now)
+                if (
+                    sum(len(item["text"].strip()) for item in context)
+                    < settings.natural_reply_min_context
+                ):
+                    continue
                 counts = self.store.db.execute(
                     """SELECT COUNT(*), COUNT(DISTINCT sender_id) FROM messages
                        WHERE chat_id=? AND thread_id=? AND is_bot=0 AND sent_at BETWEEN ? AND ?""",
                     (chat_id, thread, now - 3600, now),
                 ).fetchone()
-                if counts[0] < 3 or counts[1] < 2:
+                named = any(
+                    not item["is_bot"] and contains_agent_name(item["text"], settings.agent_names)
+                    for item in context
+                )
+                if not named and (counts[0] < 3 or counts[1] < 2):
                     continue
+                if named:
+                    probability = settings.name_mention_probability
                 kind, instruction, anchor = "participation", settings.participation_prompt, human
             else:
                 continue
             # Persist BEFORE rolling or generating: polling/restarts cannot reroll the same pause.
             if not self.store.claim_opportunity(chat_id, thread, kind, anchor):
                 continue
-            if kind == "participation" and random.random() >= settings.participation_probability:
+            if kind == "participation" and random.random() >= probability:
                 continue
             self.store.record_proactive_attempt(chat_id, now)
             message = {"chat": chat, "message_thread_id": thread}
@@ -458,7 +479,7 @@ class BotService:
                 prompt, {**message, "message_id": latest["message_id"] + 1}, telegram, now
             )
             try:
-                answer = await Agent(settings, self.client).run(prompt)
+                answer = await Agent(settings, self.client, self.store).run(prompt)
                 if answer.silent:
                     self.store.log(chat["title"], "limited", f"{kind}: chose to stay silent")
                     continue

@@ -45,6 +45,7 @@ def service(store):
 
 
 def active(store, **overrides):
+    overrides.setdefault("natural_reply_min_context", 0)
     store.save_settings(Settings(enabled=True, model="chat", api_key="key", **overrides))
     for i in range(1, 4):
         store.remember(msg(i, who=i % 2 + 1))

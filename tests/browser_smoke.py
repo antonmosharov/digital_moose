@@ -77,6 +77,11 @@ def main():
                 page.locator(".chat-toggle").filter(has_text="Allow chat").wait_for()
                 page.locator('nav a[href="#agent"]').click()
                 page.locator('[name="system_prompt"]').fill("Test system prompt")
+                page.locator('[name="agent_names"]').fill("moose, лось, лосик")
+                page.locator('[name="name_mention_probability"]').fill("0.65")
+                page.locator('[name="natural_reply_min_context"]').fill("150")
+                page.locator('[name="consciousness"]').fill("Friends enjoy tea.")
+                page.locator('[name="consciousness_prompt"]').fill("Remember useful reflections.")
                 page.locator('[name="proactive_timezone"]').fill("Europe/London")
                 page.locator('[name="daytime_start"]').fill("10")
                 page.locator('[name="daytime_end"]').fill("20")
@@ -90,6 +95,24 @@ def main():
                 page.locator("#toast").filter(has_text="Settings saved").wait_for()
                 page.reload()
                 expect(page.locator('[name="system_prompt"]')).to_have_value("Test system prompt")
+                expect(page.locator('[name="agent_names"]')).to_have_value("moose, лось, лосик")
+                expect(page.locator('[name="name_mention_probability"]')).to_have_value("0.65")
+                expect(page.locator('[name="natural_reply_min_context"]')).to_have_value("150")
+                expect(page.locator('[name="consciousness"]')).to_have_value("Friends enjoy tea.")
+                expect(page.locator('[name="consciousness_prompt"]')).to_have_value(
+                    "Remember useful reflections."
+                )
+                # An agent update must survive a save from a dashboard with older settings.
+                httpx.patch(
+                    root + "/api/settings",
+                    headers={"X-Moose-Request": "1"},
+                    json={"consciousness": "New agent reflection."},
+                ).raise_for_status()
+                page.locator('[name="temperature"]').fill("0.9")
+                page.get_by_role("button", name="Save agent settings").click()
+                expect(page.locator('[name="consciousness"]')).to_have_value(
+                    "New agent reflection."
+                )
                 expect(page.locator('[name="proactive_timezone"]')).to_have_value("Europe/London")
                 expect(page.locator('[name="daytime_start"]')).to_have_value("10")
                 expect(page.locator('[name="daytime_end"]')).to_have_value("20")
