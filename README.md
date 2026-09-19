@@ -23,6 +23,46 @@ Open **http://127.0.0.1:8000**. The dashboard works before you supply credential
 
 ## Behavior
 
+### Optional news reading
+
+Save your The News API token in **Connections → The News API**, then enable the tool
+in **Agent settings → Optional news reading**. The token is encrypted in the settings database, masked in
+dashboard responses, redacted from HTTPX request logs, and never included in model
+prompts. No environment variable is needed. The feature defaults to disabled.
+
+The agent can optionally call `read_news` during a normal reply, group participation,
+quiet-chat wake-up, or playground request, up to twice per run. Editable **News guidance**
+encourages one relevant story with a source link and the agent's own clearly separated
+perspective. News does not trigger participation by itself or bypass existing chat limits.
+
+The tool accepts optional `country` (`ae`, `jp`, `ru`), `category`, and a short `topic`.
+The agent chooses a topic based on the conversation or its personality, such as robotics
+or food festivals. The old `query` argument remains accepted for existing callers.
+Omitting the country chooses one randomly; omitting both category and topic chooses a
+random supported category. Queries search for country-related terms in titles,
+descriptions, and keywords, so relevance is approximate and the model can skip results.
+It requests up to five article excerpts from the last 72 hours, newest first, without
+restricting the source language. The provider may return fewer matches or apply a lower
+plan limit. The model compares those excerpts and can discuss a relevant story in the
+chat's language. Full article retrieval is not enabled.
+
+Uses [The News API's documented All News endpoint](https://www.thenewsapi.com/documentation):
+`GET https://api.thenewsapi.com/v1/news/all`, with URL-encoded `api_token`, `search`,
+`search_fields`, optional `categories`, `published_after`, `sort=published_at`, and `limit=5`.
+Responses contain `meta` pagination information and a `data` article array; the tool
+passes bounded titles, descriptions, snippets, source URLs, languages, and publication
+timestamps to the model. These are untrusted excerpts, not full article contents.
+
+**Daily news request limit** defaults to 20 and is shared across all chats, playground,
+and the saved-connection test. Set it to your allowance or lower; zero blocks requests.
+The persistent local counter resets at midnight UTC. Attempts count even when they fail.
+The provider's own allowance may differ. HTTP 402 pauses until the next UTC day; HTTP 429
+pauses for a minute; other HTTP/network/invalid-response failures pause for five minutes.
+Calls time out after 12 seconds and do not retry automatically. Unavailable news becomes
+a tool result asking the model to continue without news, never an exception sent to chat.
+The connection test can run while news is disabled, but still respects and consumes the
+shared request budget. Disable the switch at any time to remove the tool from new runs.
+
 ### Names and consciousness
 
 In **Agent settings → Replies when named**, enter a comma-separated string such as

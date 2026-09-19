@@ -17,6 +17,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.agent import Agent
 from app.config import Settings
 from app.consciousness import PREFILL_KEY, prefill_consciousness
+from app.news import read_news
+from app.news import usage as news_usage
 from app.prompts import Media, Prompt, UserError
 from app.store import Store
 from app.telegram import BotService, Telegram
@@ -104,6 +106,7 @@ def create_app(data_dir: str | None = None):
         activity = store.activity()
         return {
             "settings": store.public_settings(),
+            "news_usage": news_usage(store),
             "consciousness_prefill": {
                 "completed": bool(store.state(PREFILL_KEY)),
                 "running": request.app.state.consciousness_prefill_lock.locked(),
@@ -192,6 +195,19 @@ def create_app(data_dir: str | None = None):
         settings = request.app.state.store.settings().model_copy(update={"image_tools": False})
         await Agent(settings, request.app.state.client).run(Prompt("Reply with OK."))
         return {"message": "AI connection is working"}
+
+    @app.post("/api/test/news")
+    async def test_news(request: Request):
+        result = await read_news(request.app.state.store, request.app.state.client, {}, test=True)
+        return {
+            "message": (
+                f"News connected: {len(result['articles'])} articles returned."
+                if result["status"] == "ok"
+                else "News connected; no recent matches for this topic."
+                if result["status"] == "empty"
+                else f"News unavailable: {result['reason']}. Agent replies will continue without news."
+            )
+        }
 
     @app.post("/api/playground")
     async def playground(request: Request):

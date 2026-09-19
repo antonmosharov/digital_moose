@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.config import Settings
+from app.news import NEWS_TOOL, read_news
 from app.prompts import Media, Prompt, UserError
 from app.store import Store
 
@@ -307,6 +308,8 @@ class Agent:
             )
         if prompt.instruction:
             instructions.append(prompt.instruction)
+        if self.store and settings.news_enabled and settings.news_api_key:
+            instructions.append(settings.news_prompt)
         if prompt.proactive:
             instructions.append(
                 "This is an optional, unprompted contribution. Keep it short. You may return "
@@ -319,6 +322,9 @@ class Agent:
         answer = Answer()
         tools = []
         budgets = {}
+        if self.store and settings.news_enabled and settings.news_api_key:
+            tools.append(NEWS_TOOL)
+            budgets["read_news"] = 2
         if self.store:
             tools.extend(CONSCIOUSNESS_TOOLS)
             budgets.update(read_consciousness=3, write_consciousness=3)
@@ -389,7 +395,11 @@ class Agent:
                         args = json.loads(call["function"]["arguments"])
                         if not isinstance(args, dict):
                             raise TypeError("Expected tool arguments")
-                        if name == "read_consciousness":
+                        if name == "read_news":
+                            result = json.dumps(
+                                await read_news(self.store, self.client, args), ensure_ascii=False
+                            )
+                        elif name == "read_consciousness":
                             result = json.dumps(
                                 {"consciousness": self.store.read_consciousness()},
                                 ensure_ascii=False,

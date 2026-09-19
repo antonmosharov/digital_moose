@@ -73,7 +73,7 @@ class Store:
 
     def public_settings(self):
         settings = self.settings().model_dump()
-        for key in ("bot_token", "api_key"):
+        for key in ("bot_token", "api_key", "news_api_key"):
             settings[f"has_{key}"] = bool(settings.pop(key))
         return settings
 

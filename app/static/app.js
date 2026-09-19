@@ -48,6 +48,7 @@ function imageModelHint() {
 }
 function render(populate=false) {
   const s=state.settings;
+  $('#news-usage').textContent=`${state.news_usage?.requests || 0} of ${s.news_daily_limit} news requests used today (UTC).`;
   const memory=$('#agent-form [name="consciousness"]');
   if(!populate && memory.value===formSettings.consciousness) {
     memory.value=s.consciousness;
@@ -80,6 +81,7 @@ function render(populate=false) {
     }
     $('#bot-token-hint').textContent=s.has_bot_token?'Token saved. Leave blank to keep it.':'No token saved yet.';
     $('#api-key-hint').textContent=s.has_api_key?'API key saved. Leave blank to keep it.':'No API key saved yet.';
+    $('#news-api-key-hint').textContent=s.has_news_api_key?'News token saved. Leave blank to keep it.':'No news token saved yet.';
     imageModelHint();
   }
   const prefill=state.consciousness_prefill || {};
@@ -98,7 +100,7 @@ function values(form) {
   const result={};
   for(const element of form.elements) {
     if(!element.name) continue;
-    if(['bot_token','api_key'].includes(element.name)&&!element.value.trim()) continue;
+    if(['bot_token','api_key','news_api_key'].includes(element.name)&&!element.value.trim()) continue;
     result[element.name]=element.type==='checkbox'?element.checked:element.type==='number'?Number(element.value):element.value;
   }
   return result;
@@ -109,7 +111,7 @@ for(const id of ['connection-form','agent-form']) $('#'+id).addEventListener('su
     const changed=Object.fromEntries(Object.entries(values(form)).filter(([key,value])=>value!==formSettings[key]));
     if(Object.hasOwn(changed,'consciousness')) changed.consciousness_previous=formSettings.consciousness;
     await api('/settings',{method:'PATCH',body:JSON.stringify(changed)});
-    if(id==='connection-form'){form.elements.bot_token.value='';form.elements.api_key.value='';}
+    if(id==='connection-form'){form.elements.bot_token.value='';form.elements.api_key.value='';form.elements.news_api_key.value='';}
     await refresh(true);toast('Settings saved.');
   });
 });
