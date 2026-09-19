@@ -40,6 +40,7 @@ class Settings(BaseModel):
     enabled: bool = False
     consciousness: str = Field(default="", max_length=50000)
     memory_review_max_tokens: int = Field(default=4000, ge=512, le=16000)
+    memory_review_context_chars: int = Field(default=4000, ge=1000, le=50000)
     consciousness_prompt: str = (
         "Your consciousness is persistent, shared across conversations, and shapes your behavior "
         "alongside your personality instructions. Use read_consciousness and write_consciousness "

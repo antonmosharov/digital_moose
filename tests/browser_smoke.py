@@ -104,6 +104,8 @@ def main():
                 page.locator('[name="name_mention_probability"]').fill("0.65")
                 page.locator('[name="natural_reply_min_context"]').fill("150")
                 page.locator('[name="memory_review_max_tokens"]').fill("6000")
+                expect(page.locator('[name="memory_review_context_chars"]')).to_have_value("4000")
+                page.locator('[name="memory_review_context_chars"]').fill("3000")
                 page.locator('[name="news_enabled"]').check()
                 page.locator('[name="news_daily_limit"]').fill("0")
                 page.locator('[name="consciousness"]').fill("Friends enjoy tea.")
@@ -134,6 +136,7 @@ def main():
                 expect(page.locator('[name="consciousness"]')).to_have_value("Friends enjoy tea.")
                 expect(page.locator("#prefill-consciousness")).to_be_enabled()
                 expect(page.locator('[name="memory_review_max_tokens"]')).to_have_value("6000")
+                expect(page.locator('[name="memory_review_context_chars"]')).to_have_value("3000")
                 expect(page.locator('[name="consciousness_prompt"]')).to_have_value(
                     "Remember useful reflections."
                 )

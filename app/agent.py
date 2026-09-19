@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.config import Settings
+from app.memory import MemoryEditError, apply_edits, blocks, select_blocks
 from app.news import NEWS_TOOL, read_news
 from app.prompts import Media, Prompt, UserError
 from app.store import Store
@@ -37,7 +38,27 @@ MEMORY_REVIEW_TOOL = {
         "description": "Complete the required memory review. Submit focused edits for durable new information, corrections, or reflections. An empty list explicitly means nothing new is worth retaining.",
         "parameters": {
             "type": "object",
-            "properties": {"edits": MEMORY_EDITS},
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "block_id": {
+                                "type": "string",
+                                "description": "ID of a supplied memory block to replace/delete; empty string to append a new fact.",
+                            },
+                            "text": {
+                                "type": "string",
+                                "description": "New block text; empty string deletes the selected block.",
+                            },
+                        },
+                        "required": ["block_id", "text"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
             "required": ["edits"],
             "additionalProperties": False,
         },
@@ -326,6 +347,7 @@ class Agent:
     async def review_memory(self, prompt: Prompt, answer: Answer):
         answer.memory_review = "failed"
         failure = "invalid_review_response"
+        retry_reason = None
 
         def has_access():
             return not prompt.conversation or self.store.allowed(
@@ -338,10 +360,20 @@ class Agent:
 
         try:
             for attempt in range(2):
+                answer.memory_review = "failed"
                 if not has_access():
+                    failure = "access_revoked"
                     return
                 settings = self.store.settings()
                 snapshot = self.store.consciousness_snapshot()
+                selected = select_blocks(
+                    snapshot["consciousness"],
+                    json.dumps(
+                        [prompt.conversation, prompt.history, prompt.text, prompt.context],
+                        ensure_ascii=False,
+                    ),
+                    settings.memory_review_context_chars,
+                )
                 failure = "provider_request_failed"
                 response = await self.post(
                     "/chat/completions",
@@ -365,6 +397,9 @@ class Agent:
                                 "Perform a required private memory review after this interaction, even if the public reply was silent. "
                                 "Actively identify durable new facts, stated preferences, plans, recurring jokes, corrections, "
                                 "and useful reflections or changes in your own opinions. Use small edits to preserve other memories. "
+                                "Only a relevant selection of memory blocks is supplied; omitted memory is preserved automatically. "
+                                "Replace a supplied block using its exact block_id and new text, or use an empty block_id to append. "
+                                "Never copy old text into an edit or rewrite all memory. Keep new facts in short, self-contained lines with person/chat IDs. "
                                 "If nothing new is worth keeping, submit edits=[]. Do not manufacture an update or repeat stored facts. "
                                 "Distinguish stated facts from tentative interpretations; one reaction is not proof of a personality trait. "
                                 "Identify people and chats using provided IDs when available. Never invent identities or experiences. "
@@ -376,7 +411,12 @@ class Agent:
                                 "role": "user",
                                 "content": json.dumps(
                                     {
-                                        **snapshot,
+                                        "revision": snapshot["revision"],
+                                        "memory_blocks": selected,
+                                        "omitted_memory_blocks": len(
+                                            blocks(snapshot["consciousness"])
+                                        )
+                                        - len(selected),
                                         "current_time": self.store.now(),
                                         "conversation": prompt.conversation,
                                         "recent_history": prompt.history,
@@ -384,7 +424,7 @@ class Agent:
                                         "reply_context": prompt.context,
                                         "draft_reply": answer.text,
                                         "silent": answer.silent,
-                                        "retry_after_conflict": bool(attempt),
+                                        "retry_reason": retry_reason,
                                     },
                                     ensure_ascii=False,
                                 ),
@@ -407,6 +447,7 @@ class Agent:
                 function = calls[0].get("function", {})
                 if function.get("name") != "review_consciousness":
                     return
+                failure = "invalid_review_arguments"
                 args = json.loads(function["arguments"])
                 if not isinstance(args, dict) or set(args) != {"edits"}:
                     return
@@ -416,11 +457,31 @@ class Agent:
                     failure = "access_revoked"
                     return
                 failure = "invalid_memory_edit"
+                try:
+                    content = apply_edits(
+                        snapshot["consciousness"],
+                        args["edits"],
+                        {block["id"] for block in selected},
+                    )
+                except MemoryEditError as exc:
+                    failure = str(exc)
+                    answer.memory_review = "failed"
+                    if attempt == 0:
+                        self.log_tool_failure(
+                            prompt,
+                            "review_consciousness",
+                            failure + " · retrying",
+                            settings.memory_review_max_tokens,
+                        )
+                        retry_reason = failure
+                        continue
+                    return
                 answer.memory_review = self.store.revise_consciousness(
-                    snapshot["revision"], edits=args["edits"]
+                    snapshot["revision"], content=content
                 )
                 if answer.memory_review != "conflict":
                     return
+                retry_reason = "revision_conflict"
         except Exception:  # noqa: BLE001 — memory maintenance must never discard the public reply
             answer.memory_review = "failed"
         finally:

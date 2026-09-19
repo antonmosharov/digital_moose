@@ -114,9 +114,20 @@ be revised separately in the dashboard.
 Every completed agent interaction (including silent proactive turns and playground runs)
 now receives an explicit private memory review. It submits focused edits or an explicit
 no-change decision, without needing the conversation model to volunteer a memory tool call.
-One conflict retry uses the latest memory; failures preserve the public reply. The review
+Reviews select memory lines by lexical relevance to the conversation, within the admin
+**Automatic review memory context** budget (`memory_review_context_chars`, default 4000
+serialized characters). Oversized lines are skipped, so keep memories in short,
+self-contained lines. Retrieval is heuristic: omitted memories may contain related facts;
+manual merge refresh can consolidate duplicates. Reviews return only changed blocks via
+short IDs (or appended facts), avoiding brittle exact-text matching and full-memory output.
+All edits are validated atomically and omitted blocks remain unchanged. One conflict or
+invalid-edit retry uses fresh memory and a safe diagnostic reason. Failures preserve the public reply. The review
 uses the provided conversation context, not all stored history, and distinguishes stated
 facts from uncertain interpretations. Untriggered incoming messages still do not run AI.
+
+Normal conversation prompts still include the full consciousness to shape behavior.
+Manual refresh still consolidates full memory. Saving a patch rewrites the encrypted
+settings locally, but that does not require another LLM call or a full-memory generation.
 
 There are two output budgets: **Max response tokens** for normal conversation calls
 (proactive public calls remain capped at 500), and **Consciousness output tokens**
