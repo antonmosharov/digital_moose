@@ -62,6 +62,8 @@ Calls time out after 12 seconds and do not retry automatically. Unavailable news
 a tool result asking the model to continue without news, never an exception sent to chat.
 The connection test can run while news is disabled, but still respects and consumes the
 shared request budget. Disable the switch at any time to remove the tool from new runs.
+After replacing a token, click **Save connections** before testing it. Saving a different
+token clears the old provider cooldown but preserves today's local request count.
 
 ### Names and consciousness
 

@@ -118,6 +118,9 @@ async def read_news(
     store.set_state("news_usage", json.dumps(budget))
 
     def cooldown(seconds):
+        # A failed in-flight request using the old token must not block its replacement.
+        if store.settings().news_api_key != settings.news_api_key:
+            return
         latest = usage(store)
         latest["blocked_until"] = max(latest["blocked_until"], time.time() + seconds)
         store.set_state("news_usage", json.dumps(latest))

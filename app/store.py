@@ -67,8 +67,16 @@ class Store:
         return Settings.model_validate_json(self.cipher.decrypt(row[0])) if row else Settings()
 
     def save_settings(self, settings: Settings):
+        news_token_changed = self.settings().news_api_key != settings.news_api_key
         value = self.cipher.encrypt(settings.model_dump_json().encode())
         self.db.execute("INSERT OR REPLACE INTO settings VALUES (1, ?)", (value,))
+        if news_token_changed:
+            usage = json.loads(self.state("news_usage", "{}"))
+            usage["blocked_until"] = 0
+            self.db.execute(
+                "INSERT OR REPLACE INTO state VALUES (?, ?)",
+                ("news_usage", json.dumps(usage)),
+            )
         self.db.commit()
 
     def public_settings(self):

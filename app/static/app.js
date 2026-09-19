@@ -131,6 +131,9 @@ $('.bot-toggle').addEventListener('click',event=>busy(event.currentTarget,async(
   await api('/settings',{method:'PATCH',body:JSON.stringify({enabled:!state.settings.enabled})});await refresh();
 }));
 document.querySelectorAll('.test-button').forEach(button=>button.addEventListener('click',()=>busy(button,async()=>{
+  if(button.dataset.test==='news' && $('#connection-form [name="news_api_key"]').value.trim()) {
+    throw new Error('Save connections first to test the new news token. This button tests the saved token.');
+  }
   const result=await api('/test/'+button.dataset.test,{method:'POST'});toast(result.message);
 })));
 $('#chat-form').addEventListener('submit',event=>{

@@ -65,6 +65,8 @@ def main():
                 page.locator('[name="bot_token"]').fill("test-token")
                 page.locator('[name="api_key"]').fill("test-secret")
                 page.locator('[name="news_api_key"]').fill("browser-news-token")
+                page.get_by_role("button", name="Test saved news connection").click()
+                expect(page.locator("#toast")).to_contain_text("Save connections first")
                 page.locator('[name="model"]').fill("test-model")
                 page.get_by_role("button", name="Save connections").click()
                 page.locator("#api-key-hint").filter(has_text="API key saved").wait_for()

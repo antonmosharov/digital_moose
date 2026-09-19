@@ -253,3 +253,41 @@ def test_dashboard_secret_settings_and_news_test(tmp_path, monkeypatch):
         result = client.post("/api/test/news", headers=headers)
         assert result.status_code == 200
         assert "daily_limit" in result.json()["message"]
+
+
+def test_replacing_token_clears_cooldown_but_preserves_usage(tmp_path, monkeypatch):
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    with TestClient(create_app(str(tmp_path))) as client:
+        store = client.app.state.store
+        headers = {"X-Moose-Request": "1"}
+        store.save_settings(Settings(news_api_key="old-token"))
+        budget = {**usage(store), "requests": 7, "blocked_until": NOW + 86400}
+        store.set_state("news_usage", json.dumps(budget))
+        for patch in ({"temperature": 0.9}, {"news_api_key": "old-token"}):
+            assert client.patch("/api/settings", headers=headers, json=patch).status_code == 200
+            assert json.loads(store.state("news_usage")) == budget
+        assert (
+            client.patch(
+                "/api/settings", headers=headers, json={"news_api_key": "new-token"}
+            ).status_code
+            == 200
+        )
+        assert json.loads(store.state("news_usage")) == {**budget, "blocked_until": 0}
+
+
+async def test_old_request_failure_cannot_block_new_token(store):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) == 1:
+            store.save_settings(store.settings().model_copy(update={"news_api_key": "replacement"}))
+            return httpx.Response(402)
+        assert request.url.params["api_token"] == "replacement"
+        return httpx.Response(200, json=article())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert (await read_news(store, client, {}))["reason"] == "provider_quota"
+        assert (await read_news(store, client, {}))["status"] == "ok"
+    assert usage(store)["requests"] == 2
+    assert usage(store)["blocked_until"] == 0
