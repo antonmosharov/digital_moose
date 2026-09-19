@@ -329,6 +329,8 @@ class BotService:
                 "success",
                 f"Replied · {len(answer.media)} files · {answer.tool_calls} tool calls",
                 time.monotonic() - started,
+                reply_messages=answer.messages or ([answer.text] if answer.text else []),
+                tools_used=answer.tools_used,
             )
         except Exception as exc:  # noqa: BLE001 — one failed prompt must not stop polling
             detail = (
@@ -432,12 +434,25 @@ class BotService:
             silence = now - latest["sent_at"]
             human = latest["human_id"]
             probability = settings.participation_probability
-            if not human:
-                continue
-            if settings.wake_enabled and silence >= settings.wake_after_hours * 3600:
-                kind, instruction, anchor = "wake", settings.wake_prompt, human
+            group = self.store.group_activity(chat_id)
+            group_silence = now - group["sent_at"]
+            if (
+                settings.wake_enabled
+                and group_silence >= settings.wake_after_hours * 3600
+                and latest["message_id"] == group["message_id"]
+                and group["human_id"]
+            ):
+                kind, instruction, anchor = "wake", settings.wake_prompt, group["human_id"]
+                instruction += (
+                    f"\nThis is a group-wide inactivity wake-up. Last observed message across all "
+                    f"topics: {datetime.fromtimestamp(group['sent_at'], ZoneInfo(settings.proactive_timezone)).isoformat()}. "
+                    f"Measured group silence: {int(group_silence)} seconds. "
+                    "Do not infer silence from old history or memories, or claim a different duration. "
+                    "Prefer a natural opening without announcing how long the chat has been silent."
+                )
             elif (
                 settings.participation_enabled
+                and human
                 and not latest["is_bot"]
                 and settings.participation_delay_minutes * 60 <= silence <= 3600
             ):
@@ -464,7 +479,12 @@ class BotService:
             else:
                 continue
             # Persist BEFORE rolling or generating: polling/restarts cannot reroll the same pause.
-            if not self.store.claim_opportunity(chat_id, thread, kind, anchor):
+            claimed = (
+                self.store.claim_group_wake(chat_id, anchor)
+                if kind == "wake"
+                else self.store.claim_opportunity(chat_id, thread, kind, anchor)
+            )
+            if not claimed:
                 continue
             if kind == "participation" and random.random() >= probability:
                 continue
@@ -481,12 +501,26 @@ class BotService:
             try:
                 answer = await Agent(settings, self.client, self.store).run(prompt)
                 if answer.silent:
-                    self.store.log(chat["title"], "limited", f"{kind}: chose to stay silent")
+                    self.store.log(
+                        chat["title"],
+                        "limited",
+                        f"{kind}: chose to stay silent",
+                        reply_messages=[],
+                        tools_used=answer.tools_used,
+                    )
                     continue
                 # Drain updates that arrived during inference before publishing a stale interruption.
                 if before_delivery and await before_delivery() is False:
                     continue
                 current = self.store.settings()
+                if kind == "wake":
+                    current_group = self.store.group_activity(chat_id)
+                    delivery_now = time.time() if before_delivery else now
+                    if (
+                        current_group != group
+                        or delivery_now - current_group["sent_at"] < current.wake_after_hours * 3600
+                    ):
+                        continue
                 newest = self.store.db.execute(
                     "SELECT message_id FROM conversation_state WHERE chat_id=? AND thread_id=?",
                     (chat_id, thread),
@@ -505,7 +539,13 @@ class BotService:
                 if kind == "participation":
                     message["message_id"] = latest["message_id"]
                 await telegram.send(message, answer)
-                self.store.log(chat["title"], "success", f"Unprompted {kind} message")
+                self.store.log(
+                    chat["title"],
+                    "success",
+                    f"Unprompted {kind} message",
+                    reply_messages=answer.messages or ([answer.text] if answer.text else []),
+                    tools_used=answer.tools_used,
+                )
             except Exception as exc:  # noqa: BLE001 — isolate scheduled request failures
                 detail = (
                     str(exc)

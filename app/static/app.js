@@ -26,13 +26,17 @@ function route() {
 function empty(title, description) {return `<div class="empty-state"><span>✧</span><h4>${escapeHTML(title)}</h4><p>${escapeHTML(description)}</p></div>`;}
 function eventHTML(event) {
   const labels={success:'Replied',error:'Error',blocked:'Blocked',limited:'Limited'};
-  return `<div class="event"><span class="badge ${escapeHTML(event.status)}">${labels[event.status]||'Event'}</span><div class="event-main"><strong>${escapeHTML(event.chat)}</strong><p>${escapeHTML(event.detail)}</p></div><time title="${escapeHTML(event.time)}">${escapeHTML(new Date(event.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</time></div>`;
+  const replies=event.reply_messages || [], tools=event.tools_used || [];
+  const details=replies.length || tools.length ? `<details class="event-details" data-event="${escapeHTML(event.id)}"><summary>View reply & tools</summary><div class="event-tools">Tools called: ${tools.length ? tools.map(escapeHTML).join(' → ') : 'None'}</div>${replies.map(text=>`<pre class="event-reply">${escapeHTML(text)}</pre>`).join('')}${!replies.length ? '<p>No text reply.</p>' : ''}</details>` : '';
+  return `<div class="event"><span class="badge ${escapeHTML(event.status)}">${labels[event.status]||'Event'}</span><div class="event-main"><strong>${escapeHTML(event.chat)}</strong><p>${escapeHTML(event.detail)}</p>${details}</div><time title="${escapeHTML(event.time)}">${escapeHTML(new Date(event.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</time></div>`;
 }
 function renderActivity() {
+  const expanded=new Set([...document.querySelectorAll('.event-details[open]')].map(el=>el.dataset.event));
   const filter=$('#activity-filter').value;
   const events=state.activity.filter(e=>filter==='all'||e.status===filter);
   $('#activity-list').innerHTML=events.map(eventHTML).join('')||empty('A clean slate.','Mentions and optional participation appear here.');
   $('#recent-activity').innerHTML=state.activity.slice(0,3).map(eventHTML).join('')||empty('Quiet for now.','Your agent’s next conversation starts here.');
+  document.querySelectorAll('.event-details').forEach(el=>{el.open=expanded.has(el.dataset.event);});
 }
 function imageModelHint() {
   const input=$('#agent-form [name="image_model"]');

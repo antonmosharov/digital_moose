@@ -88,6 +88,7 @@ async def test_consciousness_tools_persist_and_update_system_context(store):
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         answer = await Agent(store.settings(), client, store).run(Prompt("Remember tea"))
     assert answer.tool_calls == 2
+    assert answer.tools_used == ["read_consciousness", "write_consciousness"]
     assert "Original" in requests[0]["messages"][0]["content"]
     assert "Likes tea" in requests[-1]["messages"][0]["content"]
     assert store.read_consciousness() == "Likes tea"

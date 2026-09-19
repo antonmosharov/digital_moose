@@ -23,6 +23,14 @@ Open **http://127.0.0.1:8000**. The dashboard works before you supply credential
 
 ## Behavior
 
+Activity entries include an expandable **View reply & tools** section for new replies.
+It preserves the full response text (including multiple messages) and tool names in
+call order, including repeated calls. These details are encrypted in the database and
+available only through the authenticated dashboard. Tool arguments and results are not
+copied into the activity log. Wake-ups and voluntary silence also record tool names.
+Existing entries retain their summaries; past reply details cannot be reconstructed.
+The existing 1,000-entry activity retention limit applies to these details too.
+
 ### Optional news reading
 
 Save your The News API token in **Connections → The News API**, then enable the tool
@@ -159,7 +167,7 @@ Both budgets are configurable, and zero disables the respective tool. Invalid ca
 
 **Multiple replies and memes:** by default, 25% of triggered requests permit the model to send up to three short text messages, followed by any generated images. This is an opportunity, not a requirement: the model chooses whether a split or an unsolicited, relevant meme is appropriate. Code draws the probability and caps the number of text bubbles; a supplemental system instruction controls tone and relevance. Set the probability to zero to disable this behavior. Telegram's mandatory length-based splitting still applies to long text. Unprompted participation stays to one short text reply and cannot generate images.
 
-**Wake-up:** after 48 hours of silence, send one optional friendly message during daytime. The separate wake-up prompt can ask for a joke, greeting, or continuation of an older conversation through the history tool. After that attempt, the bot waits for a new human message before another wake-up; it never keeps waking an unanswered chat. Silence includes the bot's own messages. Timing metadata survives content retention expiry.
+**Wake-up:** after 48 hours of inactivity across the entire group, send one optional friendly message during daytime in the most recently active topic. Messages in any topic, including the agent's own replies, reset the group silence timer. Group-wide activity is rechecked before delivery; new activity cancels the draft. The prompt receives the measured silence duration and discourages announcing it. The separate wake-up prompt can ask for a joke, greeting, or continuation of an older conversation through the history tool. After an attempt, any new human message anywhere in the group enables a later wake-up after another full silence interval; a direct reply is not required. Timing and attempt records survive restarts and content retention expiry. Ordinary participation remains topic-specific.
 
 **Occasional participation:** after five minutes of silence, draw one 5% probability check for that pause. Eligibility requires at least three human messages from two distinct senders in the preceding hour, with a human speaking last. Pauses older than an hour are not considered for this mode. A failed draw is persisted and never retried until another human message creates a new pause. If selected, the model can still return `[[SILENT]]` when it has nothing useful to add.
 

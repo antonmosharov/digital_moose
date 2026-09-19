@@ -65,7 +65,11 @@ async def test_reply_prompt_and_access(store):
     reply = {"text": "Flexible", "photo": [{"file_id": "small"}, {"file_id": "large"}]}
     incoming = message(reply_to_message=reply, message_thread_id=8)
     with patch(
-        "app.telegram.Agent.run", new_callable=AsyncMock, return_value=Answer("Explanation")
+        "app.telegram.Agent.run",
+        new_callable=AsyncMock,
+        return_value=Answer(
+            "Explanation", tool_calls=2, tools_used=["read_news", "read_consciousness"]
+        ),
     ) as run:
         await service.handle({"message": incoming}, telegram)
         run.assert_not_called()
@@ -80,6 +84,8 @@ async def test_reply_prompt_and_access(store):
         assert telegram.download.call_args.args[0]["file_id"] == "large"
         telegram.send.assert_awaited_once()
         assert store.activity()[0]["status"] == "success"
+        assert store.activity()[0]["reply_messages"] == ["Explanation"]
+        assert store.activity()[0]["tools_used"] == ["read_news", "read_consciousness"]
 
 
 async def test_reply_with_old_mention_does_not_trigger(store):

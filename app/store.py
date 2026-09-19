@@ -60,6 +60,8 @@ class Store:
             );
             CREATE INDEX IF NOT EXISTS attempts_chat ON proactive_attempts(chat_id, attempted_at);
         """)
+        if "payload" not in {row[1] for row in self.db.execute("PRAGMA table_info(activity)")}:
+            self.db.execute("ALTER TABLE activity ADD COLUMN payload BLOB")
         self.db.commit()
 
     def settings(self) -> Settings:
@@ -281,6 +283,26 @@ class Store:
         self.db.commit()
         return bool(cursor.rowcount)
 
+    def group_activity(self, chat_id: int) -> dict:
+        return dict(
+            self.db.execute(
+                """SELECT MAX(sent_at) AS sent_at, MAX(message_id) AS message_id,
+                      MAX(human_id) AS human_id
+               FROM conversation_state WHERE chat_id=?""",
+                (chat_id,),
+            ).fetchone()
+        )
+
+    def claim_group_wake(self, chat_id: int, human_id: int) -> bool:
+        # Include old topic-level claims so upgrading doesn't repeat an earlier wake.
+        row = self.db.execute(
+            "SELECT MAX(message_id) FROM opportunities WHERE chat_id=? AND kind='wake'",
+            (chat_id,),
+        ).fetchone()
+        if row[0] is not None and row[0] >= human_id:
+            return False
+        return self.claim_opportunity(chat_id, -1, "wake", human_id)
+
     def proactive_available(
         self, chat_id: int, now: float, day_start: float, settings: Settings
     ) -> bool:
@@ -306,19 +328,51 @@ class Store:
     def chats(self):
         return [dict(row) for row in self.db.execute("SELECT * FROM chats ORDER BY seen DESC")]
 
-    def log(self, chat: str, status: str, detail: str, duration: float = 0):
+    def log(
+        self,
+        chat: str,
+        status: str,
+        detail: str,
+        duration: float = 0,
+        *,
+        reply_messages: list[str] | None = None,
+        tools_used: list[str] | None = None,
+    ):
+        payload = (
+            self.cipher.encrypt(
+                json.dumps(
+                    {
+                        "reply_messages": reply_messages or [],
+                        "tools_used": tools_used or [],
+                    },
+                    ensure_ascii=False,
+                ).encode()
+            )
+            if reply_messages is not None or tools_used is not None
+            else None
+        )
         self.db.execute(
-            "INSERT INTO activity(time, chat, status, detail, duration) VALUES (?, ?, ?, ?, ?)",
-            (self.now(), chat, status, detail[:500], duration),
+            "INSERT INTO activity(time, chat, status, detail, duration, payload) VALUES (?, ?, ?, ?, ?, ?)",
+            (self.now(), chat, status, detail[:500], duration, payload),
         )
         self.db.execute("DELETE FROM activity WHERE id <= (SELECT MAX(id)-1000 FROM activity)")
         self.db.commit()
 
     def activity(self):
-        return [
-            dict(row)
-            for row in self.db.execute("SELECT * FROM activity ORDER BY id DESC LIMIT 100")
-        ]
+        events = []
+        for row in self.db.execute("SELECT * FROM activity ORDER BY id DESC LIMIT 100"):
+            event = dict(row)
+            payload = event.pop("payload")
+            event.update(
+                json.loads(self.cipher.decrypt(payload))
+                if payload
+                else {
+                    "reply_messages": [],
+                    "tools_used": [],
+                }
+            )
+            events.append(event)
+        return events
 
     def state(self, key: str, default: str = "") -> str:
         row = self.db.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()

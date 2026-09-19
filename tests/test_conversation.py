@@ -354,6 +354,71 @@ async def test_wake_survives_content_retention_expiry(store):
     assert store.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
 
 
+@pytest.mark.parametrize("is_bot", [False, True])
+async def test_recent_activity_in_any_topic_blocks_wake_after_restart(store, tmp_path, is_bot):
+    store.save_settings(Settings(enabled=True, participation_enabled=False))
+    store.remember(msg(1, at=NOW - 3 * 86400))
+    store.remember(msg(2, thread=8, at=NOW - 7200), is_bot=is_bot)
+    reopened = Store(str(tmp_path))
+    try:
+        with patch("app.telegram.Agent.run", new_callable=AsyncMock) as run:
+            await service(store).proactive(AsyncMock(), now=NOW)
+            await service(reopened).proactive(AsyncMock(), now=NOW)
+        run.assert_not_called()
+    finally:
+        reopened.db.close()
+
+
+@pytest.mark.parametrize("is_bot", [False, True])
+async def test_any_topic_activity_during_wake_generation_cancels_delivery(store, is_bot):
+    store.save_settings(Settings(enabled=True, participation_enabled=False))
+    store.remember(msg(1, at=NOW - 3 * 86400))
+    telegram = AsyncMock()
+
+    async def refresh():
+        store.remember(msg(2, thread=9, at=NOW), is_bot=is_bot)
+
+    with patch(
+        "app.telegram.Agent.run", new_callable=AsyncMock, return_value=Answer("Hello")
+    ) as run:
+        await service(store).proactive(telegram, now=NOW, before_delivery=refresh)
+    run.assert_awaited_once()
+    telegram.send.assert_not_called()
+
+
+async def test_one_group_wake_in_latest_topic_persists_across_restart(store, tmp_path):
+    store.save_settings(Settings(enabled=True, participation_enabled=False))
+    store.remember(msg(1, thread=2, at=NOW - 4 * 86400))
+    store.remember(msg(2, thread=8, at=NOW - 3 * 86400))
+    store.remember(msg(3, thread=9, at=NOW - 2 * 86400), is_bot=True)
+    telegram = AsyncMock()
+    with patch(
+        "app.telegram.Agent.run", new_callable=AsyncMock, return_value=Answer("Hello")
+    ) as run:
+        await service(store).proactive(telegram, now=NOW)
+        assert telegram.send.call_args.args[0]["message_thread_id"] == 9
+        assert "Measured group silence: 172800 seconds" in run.call_args.args[0].instruction
+        reopened = Store(str(tmp_path))
+        try:
+            await service(reopened).proactive(telegram, now=NOW + 3 * 86400)
+        finally:
+            reopened.db.close()
+        run.assert_awaited_once()
+        # Any human message anywhere, not necessarily a direct reply, enables a later wake.
+        store.remember(msg(4, thread=12, at=NOW + 3 * 86400))
+        await service(store).proactive(telegram, now=NOW + 6 * 86400)
+        assert run.await_count == 2
+
+
+async def test_legacy_topic_wake_is_not_repeated_by_group_wake(store):
+    store.save_settings(Settings(enabled=True, participation_enabled=False))
+    store.remember(msg(1, thread=4, at=NOW - 3 * 86400))
+    store.claim_opportunity(-100, 4, "wake", 1)
+    with patch("app.telegram.Agent.run", new_callable=AsyncMock) as run:
+        await service(store).proactive(AsyncMock(), now=NOW)
+    run.assert_not_called()
+
+
 async def test_new_activity_during_generation_cancels_proactive_delivery(store):
     active(store, participation_probability=1)
     telegram = AsyncMock()

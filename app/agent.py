@@ -114,6 +114,7 @@ class Answer:
     tool_calls: int = 0
     messages: list[str] = field(default_factory=list)
     silent: bool = False
+    tools_used: list[str] = field(default_factory=list)
 
 
 def decode_image(url: str) -> Media:
@@ -391,6 +392,7 @@ class Agent:
                         1  # Invalid arguments and duplicate fetches also consume budget.
                     )
                     answer.tool_calls += 1
+                    answer.tools_used.append(name)
                     try:
                         args = json.loads(call["function"]["arguments"])
                         if not isinstance(args, dict):

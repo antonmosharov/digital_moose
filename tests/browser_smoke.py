@@ -150,6 +150,41 @@ def main():
                 page.locator('nav a[href="#agent"]').click()
                 page.screenshot(path="test-results/agent-settings-mobile.png", full_page=True)
                 assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+                def activity_state(route):
+                    response = route.fetch()
+                    data = response.json()
+                    data["activity"] = [
+                        {
+                            "id": 123,
+                            "time": "2026-09-19T10:00:00Z",
+                            "chat": "Test chat",
+                            "status": "success",
+                            "detail": "Replied · 0 files · 2 tool calls",
+                            "reply_messages": [
+                                "Hello <script>window.activityInjected=true</script>",
+                                "Second reply",
+                            ],
+                            "tools_used": ["read_news", "read_consciousness"],
+                        }
+                    ]
+                    route.fulfill(response=response, json=data)
+
+                page.route("**/api/state", activity_state)
+                page.evaluate("refresh()")
+                page.locator('nav a[href="#activity"]').click()
+                details = page.locator("#activity-list .event-details")
+                details.locator("summary").click()
+                expect(details.locator(".event-reply").first).to_have_text(
+                    "Hello <script>window.activityInjected=true</script>"
+                )
+                expect(details.locator(".event-tools")).to_contain_text(
+                    "read_news → read_consciousness"
+                )
+                page.evaluate("refresh()")
+                expect(details).to_have_attribute("open", "")
+                assert not page.evaluate("Boolean(window.activityInjected)")
+                assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
                 assert not errors, errors
                 browser.close()
                 print(
