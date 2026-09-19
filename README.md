@@ -99,8 +99,9 @@ the playground. **Consciousness guidance** explains how the agent should use it 
 observations, preferences, beliefs, highlights, and reflections. The agent can call
 `read_consciousness` and `write_consciousness` during direct replies, proactive turns,
 and playground requests, with up to three calls to each tool per request. It cannot
-run outside those requests. Writes replace the complete text (up to 50,000 characters)
-and require the previous text to avoid overwriting concurrent revisions. After a
+run outside those requests. Reads return the current text and a short revision ID.
+Writes use that revision with targeted `edits` (`old`/`new`; empty `old` appends), or
+`content` for a complete replacement. Memory is limited to 50,000 characters. After a
 conflict, the agent must read again and merge. Successful writes immediately update
 the current request's system context and persist for future requests and restarts.
 
@@ -110,17 +111,46 @@ newer memories. Clearing the field clears memory. Revoking chat access deletes s
 chat history but does not remove reflections from the shared consciousness; those can
 be revised separately in the dashboard.
 
-To seed initially empty consciousness, save your personality and consciousness guidance,
-then click **Initialize from conversation history** in the Consciousness card. This
-one-time action analyzes all retained text/captions in currently allowed chats (including
-private chats only when enabled), in chronological batches through the configured AI
-provider. It does not download attachments. Each batch refines a compact draft with
-chat, participant, and timestamp context. Large histories require multiple model calls
-and may take several minutes. Max response tokens controls the draft output budget.
-Only the completed analysis is saved; failures and concurrent memory/personality/access
-changes leave existing memory untouched and allow retry. A persistent completion marker
-prevents rerunning the action even if consciousness is later cleared. Normal admin and
-agent memory editing remains available. The API action is `POST /api/consciousness/prefill`.
+Every completed agent interaction (including silent proactive turns and playground runs)
+now receives an explicit private memory review. It submits focused edits or an explicit
+no-change decision, without needing the conversation model to volunteer a memory tool call.
+One conflict retry uses the latest memory; failures preserve the public reply. The review
+uses the provided conversation context, not all stored history, and distinguishes stated
+facts from uncertain interpretations. Untriggered incoming messages still do not run AI.
+
+There are two output budgets: **Max response tokens** for normal conversation calls
+(proactive public calls remain capped at 500), and **Consciousness output tokens**
+(`memory_review_max_tokens`, default 4000) for automatic reviews and manual refreshes.
+Ordinary optional memory tool calls still share the conversation call's output budget;
+the separate mandatory review supports memory work beyond that budget. Each review
+adds a model request and latency before delivery. The activity log shows updated,
+no-change, conflict, or failed review status. Failed tools and truncated outputs create
+error entries with safe reasons; prompts, credentials, and raw tool arguments are not logged.
+
+For a manual refresh, save your settings and click **Refresh from conversation history**.
+Select a history window (default 7 days) and either merge useful observations into existing
+memory or rebuild from that window. This action can be repeated. It analyzes retained
+text/captions in allowed chats, including private chats only when enabled, in chronological
+batches without downloading attachments. Only the completed result is saved; concurrent
+memory/personality/access changes cancel the save. The API is `POST /api/consciousness/prefill`
+with `{"days":7,"mode":"merge"}` or `"mode":"rebuild"`, using dashboard authentication.
+
+### Read-only production diagnostics
+
+Generate a debug token in **Connections → Read-only debug API**. Copy it when shown;
+only its SHA-256 hash is stored. Rotation invalidates the old token and revocation
+disables access immediately. Use HTTPS with `Authorization: Bearer YOUR_DEBUG_TOKEN`
+to call `GET /api/debug`. This token is rejected by all dashboard/control endpoints.
+
+The snapshot includes non-secret settings (including personality and consciousness),
+activity/tool-failure logs, bot status, group/topic timing, proactive attempts, news usage,
+and a bounded history page. Optional parameters: `limit` (1–100, default 50), `chat_id`,
+and `before` (use the returned `next_before` cursor while `has_more` is true). The history
+filter does not restrict the other diagnostic sections. Media binaries, Telegram file
+references, environment dumps, and raw database state are excluded. Configured tokens,
+the admin password, and recognizable debug tokens are redacted from text as well.
+History may contain personal conversation content, so give this token only to a trusted
+debugger. The endpoint performs no updates, pruning, model calls, or bot actions.
 
 | Incoming message | Behavior |
 | --- | --- |

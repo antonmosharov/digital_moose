@@ -97,6 +97,7 @@ class Prompt:
     media_reader: Callable[[str], Awaitable[Media]] | None = None
     instruction: str = ""
     proactive: bool = False
+    conversation: dict = field(default_factory=dict)
 
     def content(self) -> list[dict]:
         parts = []

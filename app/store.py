@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sqlite3
@@ -89,6 +90,44 @@ class Store:
 
     def read_consciousness(self) -> str:
         return self.settings().consciousness
+
+    def consciousness_snapshot(self) -> dict:
+        content = self.read_consciousness()
+        return {
+            "consciousness": content,
+            "revision": hashlib.sha256(content.encode()).hexdigest()[:24],
+        }
+
+    def revise_consciousness(
+        self, revision: str, *, edits: list | None = None, content: str | None = None
+    ) -> str:
+        snapshot = self.consciousness_snapshot()
+        if snapshot["revision"] != revision:
+            return "conflict"
+        previous = snapshot["consciousness"]
+        if (edits is None) == (content is None):
+            raise ValueError("Supply either edits or content")
+        if edits is not None:
+            if not isinstance(edits, list) or len(edits) > 20:
+                raise ValueError("Invalid memory edits")
+            content = previous
+            for edit in edits:
+                if not isinstance(edit, dict) or set(edit) != {"old", "new"}:
+                    raise ValueError("Invalid memory edit")
+                old, new = edit["old"], edit["new"]
+                if not isinstance(old, str) or not isinstance(new, str):
+                    raise TypeError("Memory edits must contain text")
+                if old == "":
+                    content += ("\n" if content and new else "") + new
+                elif content.count(old) == 1:
+                    content = content.replace(old, new, 1)
+                else:
+                    raise ValueError("Memory edit must match exactly once")
+        if not isinstance(content, str) or len(content) > 50000:
+            raise ValueError("Invalid consciousness size")
+        if content == previous:
+            return "no_change"
+        return "updated" if self.write_consciousness(content, previous) else "conflict"
 
     def write_consciousness(self, content: str, previous: str) -> bool:
         # Synchronous read/check/write: no request can interleave on the event loop.
@@ -253,6 +292,7 @@ class Store:
                     "reference": f"telegram:{chat_id}:{thread_id}:{row['message_id']}",
                     "time": datetime.fromtimestamp(row["sent_at"], UTC).isoformat(),
                     "who": value["who"],
+                    "sender_id": row["sender_id"],
                     "is_bot": bool(row["is_bot"]),
                     "text": text[:4000] + (" [truncated]" if len(text) > 4000 else ""),
                     "media": value["media"],
@@ -337,6 +377,7 @@ class Store:
         *,
         reply_messages: list[str] | None = None,
         tools_used: list[str] | None = None,
+        memory_review: str | None = None,
     ):
         payload = (
             self.cipher.encrypt(
@@ -344,6 +385,7 @@ class Store:
                     {
                         "reply_messages": reply_messages or [],
                         "tools_used": tools_used or [],
+                        "memory_review": memory_review,
                     },
                     ensure_ascii=False,
                 ).encode()

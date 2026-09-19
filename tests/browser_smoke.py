@@ -71,6 +71,24 @@ def main():
                 page.get_by_role("button", name="Save connections").click()
                 page.locator("#api-key-hint").filter(has_text="API key saved").wait_for()
                 expect(page.locator('[name="api_key"]')).to_have_value("")
+                page.get_by_role("button", name="Generate / rotate debug token").click()
+                expect(page.locator("#debug-token-status")).to_contain_text("Debug token active")
+                debug_token = page.locator("#debug-token").input_value()
+                assert debug_token.startswith("moose_debug_")
+                assert (
+                    httpx.get(
+                        root + "/api/debug", headers={"Authorization": "Bearer " + debug_token}
+                    ).status_code
+                    == 200
+                )
+                page.get_by_role("button", name="Revoke token", exact=True).click()
+                expect(page.locator("#debug-token-status")).to_contain_text("No debug token")
+                assert (
+                    httpx.get(
+                        root + "/api/debug", headers={"Authorization": "Bearer " + debug_token}
+                    ).status_code
+                    == 401
+                )
                 page.locator('nav a[href="#chats"]').click()
                 page.locator('#chat-form [name="title"]').fill("Test team")
                 page.locator('#chat-form [name="id"]').fill("-100999")
@@ -79,12 +97,13 @@ def main():
                 page.get_by_role("button", name="Revoke access").click()
                 page.locator(".chat-toggle").filter(has_text="Allow chat").wait_for()
                 page.locator('nav a[href="#agent"]').click()
-                page.get_by_role("button", name="Initialize from conversation history").click()
+                page.get_by_role("button", name="Refresh from conversation history").click()
                 expect(page.locator("#toast")).to_contain_text("No retained conversation text")
                 page.locator('[name="system_prompt"]').fill("Test system prompt")
                 page.locator('[name="agent_names"]').fill("moose, лось, лосик")
                 page.locator('[name="name_mention_probability"]').fill("0.65")
                 page.locator('[name="natural_reply_min_context"]').fill("150")
+                page.locator('[name="memory_review_max_tokens"]').fill("6000")
                 page.locator('[name="news_enabled"]').check()
                 page.locator('[name="news_daily_limit"]').fill("0")
                 page.locator('[name="consciousness"]').fill("Friends enjoy tea.")
@@ -113,7 +132,8 @@ def main():
                 expect(page.locator("#toast")).to_contain_text("daily_limit")
                 page.locator('nav a[href="#agent"]').click()
                 expect(page.locator('[name="consciousness"]')).to_have_value("Friends enjoy tea.")
-                expect(page.locator("#prefill-consciousness")).to_be_disabled()
+                expect(page.locator("#prefill-consciousness")).to_be_enabled()
+                expect(page.locator('[name="memory_review_max_tokens"]')).to_have_value("6000")
                 expect(page.locator('[name="consciousness_prompt"]')).to_have_value(
                     "Remember useful reflections."
                 )

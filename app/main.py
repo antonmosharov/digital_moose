@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 import secrets
 import time
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 import httpx
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +18,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.agent import Agent
 from app.config import Settings
 from app.consciousness import PREFILL_KEY, prefill_consciousness
+from app.debug import telemetry
 from app.news import read_news
 from app.news import usage as news_usage
 from app.prompts import Media, Prompt, UserError
@@ -44,6 +46,22 @@ def create_app(data_dir: str | None = None):
     async def auth(
         request: Request, credentials: Annotated[HTTPBasicCredentials | None, Depends(security)]
     ):
+        authorization = request.headers.get("authorization", "")
+        if request.url.path == "/api/debug" or request.url.path.startswith("/api/debug/"):
+            if request.method != "GET":
+                raise HTTPException(405, "Debug API is read-only")
+            scheme, _, token = authorization.partition(" ")
+            expected = request.app.state.store.state("debug_token_hash")
+            if (
+                scheme.lower() != "bearer"
+                or not token
+                or not expected
+                or not secrets.compare_digest(hashlib.sha256(token.encode()).hexdigest(), expected)
+            ):
+                raise HTTPException(401, "Invalid debug token")
+            return
+        if authorization.lower().startswith("bearer "):
+            raise HTTPException(403, "Debug tokens only authorize read-only debug endpoints")
         password = os.getenv("ADMIN_PASSWORD", "")
         if password:
             if not credentials or not secrets.compare_digest(
@@ -106,6 +124,7 @@ def create_app(data_dir: str | None = None):
         activity = store.activity()
         return {
             "settings": store.public_settings(),
+            "debug_token_configured": bool(store.state("debug_token_hash")),
             "news_usage": news_usage(store),
             "consciousness_prefill": {
                 "completed": bool(store.state(PREFILL_KEY)),
@@ -159,13 +178,67 @@ def create_app(data_dir: str | None = None):
         await request.app.state.bot.restart()
         return store.public_settings()
 
+    class PrefillInput(BaseModel):
+        days: int = Field(default=7, ge=1, le=3650)
+        mode: str = Field(default="merge", pattern="^(merge|rebuild)$")
+
     @app.post("/api/consciousness/prefill")
-    async def prefill(request: Request):
+    async def prefill(request: Request, value: PrefillInput | None = None):
         lock = request.app.state.consciousness_prefill_lock
         if lock.locked():
             raise HTTPException(409, "Consciousness initialization is already running.")
         async with lock:
-            return await prefill_consciousness(request.app.state.store, request.app.state.client)
+            store = request.app.state.store
+            try:
+                result = await prefill_consciousness(
+                    store, request.app.state.client, **(value or PrefillInput()).model_dump()
+                )
+            except UserError as exc:
+                store.log(
+                    "Consciousness",
+                    "error",
+                    str(exc),
+                    tools_used=["prefill_consciousness"],
+                    memory_review="failed",
+                )
+                raise
+            store.log(
+                "Consciousness",
+                "success",
+                f"Manual memory refresh completed: {result['batches']} batches",
+                tools_used=["prefill_consciousness"],
+                memory_review="updated",
+            )
+            return result
+
+    @app.post("/api/debug-token")
+    async def generate_debug_token(request: Request):
+        token = "moose_debug_" + secrets.token_urlsafe(32)
+        request.app.state.store.set_state(
+            "debug_token_hash", hashlib.sha256(token.encode()).hexdigest()
+        )
+        return {"token": token}
+
+    @app.delete("/api/debug-token")
+    async def revoke_debug_token(request: Request):
+        request.app.state.store.set_state("debug_token_hash", "")
+        return {"ok": True}
+
+    @app.get("/api/debug")
+    async def debug_snapshot(
+        request: Request,
+        limit: int = Query(default=50, ge=1, le=100),
+        before: int | None = Query(default=None, ge=1),
+        chat_id: int | None = None,
+    ):
+        return telemetry(
+            request.app.state.store,
+            request.app.state.bot,
+            limit=limit,
+            before=before,
+            chat_id=chat_id,
+            token=request.headers["authorization"].partition(" ")[2],
+        )
 
     class ChatInput(BaseModel):
         id: int
@@ -234,6 +307,7 @@ def create_app(data_dir: str | None = None):
             "messages": answer.messages or ([answer.text] if answer.text else []),
             "images": [m.data_url() for m in answer.media],
             "tool_calls": answer.tool_calls,
+            "memory_review": answer.memory_review,
         }
 
     @app.post("/api/playground/media")
@@ -270,6 +344,7 @@ def create_app(data_dir: str | None = None):
             "messages": answer.messages or ([answer.text] if answer.text else []),
             "images": [m.data_url() for m in answer.media],
             "tool_calls": answer.tool_calls,
+            "memory_review": answer.memory_review,
         }
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

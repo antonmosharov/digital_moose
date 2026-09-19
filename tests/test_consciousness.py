@@ -75,7 +75,13 @@ async def test_consciousness_tools_persist_and_update_system_context(store):
         [
             completion(calls=[call("read_consciousness")]),
             completion(
-                calls=[call("write_consciousness", previous="Original", content="Likes tea")]
+                calls=[
+                    call(
+                        "write_consciousness",
+                        revision=store.consciousness_snapshot()["revision"],
+                        edits=[{"old": "Original", "new": "Likes tea"}],
+                    )
+                ]
             ),
             completion("Remembered"),
         ]
@@ -86,7 +92,7 @@ async def test_consciousness_tools_persist_and_update_system_context(store):
         return httpx.Response(200, json=next(replies))
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        answer = await Agent(store.settings(), client, store).run(Prompt("Remember tea"))
+        answer = await Agent(store.settings(), client, store).respond(Prompt("Remember tea"))
     assert answer.tool_calls == 2
     assert answer.tools_used == ["read_consciousness", "write_consciousness"]
     assert "Original" in requests[0]["messages"][0]["content"]
@@ -182,9 +188,17 @@ async def test_invalid_and_conflicting_tool_writes_preserve_memory(store):
     replies = iter(
         [
             completion(
-                calls=[call("write_consciousness", previous="Old memory", content="Overwrite")]
+                calls=[call("write_consciousness", revision="stale-revision", content="Overwrite")]
             ),
-            completion(calls=[call("write_consciousness", previous="Newer memory", content=123)]),
+            completion(
+                calls=[
+                    call(
+                        "write_consciousness",
+                        revision=store.consciousness_snapshot()["revision"],
+                        content=123,
+                    )
+                ]
+            ),
             completion("Done"),
         ]
     )
@@ -195,7 +209,7 @@ async def test_invalid_and_conflicting_tool_writes_preserve_memory(store):
         return httpx.Response(200, json=next(replies))
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await Agent(store.settings(), client, store).run(Prompt("Remember"))
+        await Agent(store.settings(), client, store).respond(Prompt("Remember"))
     assert store.read_consciousness() == "Newer memory"
     results = [m["content"] for m in requests[-1]["messages"] if m["role"] == "tool"]
     assert results[0].startswith("Conflict:")

@@ -331,6 +331,7 @@ class BotService:
                 time.monotonic() - started,
                 reply_messages=answer.messages or ([answer.text] if answer.text else []),
                 tools_used=answer.tools_used,
+                memory_review=answer.memory_review,
             )
         except Exception as exc:  # noqa: BLE001 — one failed prompt must not stop polling
             detail = (
@@ -348,6 +349,12 @@ class BotService:
     ):
         now = time.time() if now is None else now
         chat, thread = message["chat"], message.get("message_thread_id", 0)
+        prompt.conversation = {
+            "chat_id": chat["id"],
+            "chat_type": chat.get("type"),
+            "thread_id": thread,
+            "sender": message.get("from", {}),
+        }
         prompt.instruction += (
             "\nCurrent conversation time: "
             + datetime.fromtimestamp(
@@ -507,6 +514,7 @@ class BotService:
                         f"{kind}: chose to stay silent",
                         reply_messages=[],
                         tools_used=answer.tools_used,
+                        memory_review=answer.memory_review,
                     )
                     continue
                 # Drain updates that arrived during inference before publishing a stale interruption.
@@ -545,6 +553,7 @@ class BotService:
                     f"Unprompted {kind} message",
                     reply_messages=answer.messages or ([answer.text] if answer.text else []),
                     tools_used=answer.tools_used,
+                    memory_review=answer.memory_review,
                 )
             except Exception as exc:  # noqa: BLE001 — isolate scheduled request failures
                 detail = (

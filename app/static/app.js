@@ -27,8 +27,9 @@ function empty(title, description) {return `<div class="empty-state"><span>✧</
 function eventHTML(event) {
   const labels={success:'Replied',error:'Error',blocked:'Blocked',limited:'Limited'};
   const replies=event.reply_messages || [], tools=event.tools_used || [];
+  const memory=event.memory_review ? `<p>Memory review: ${escapeHTML(({updated:'Updated',no_change:'No new memory needed',conflict:'Conflict — newer memory preserved',failed:'Failed — reply unaffected'})[event.memory_review] || event.memory_review)}</p>` : '';
   const details=replies.length || tools.length ? `<details class="event-details" data-event="${escapeHTML(event.id)}"><summary>View reply & tools</summary><div class="event-tools">Tools called: ${tools.length ? tools.map(escapeHTML).join(' → ') : 'None'}</div>${replies.map(text=>`<pre class="event-reply">${escapeHTML(text)}</pre>`).join('')}${!replies.length ? '<p>No text reply.</p>' : ''}</details>` : '';
-  return `<div class="event"><span class="badge ${escapeHTML(event.status)}">${labels[event.status]||'Event'}</span><div class="event-main"><strong>${escapeHTML(event.chat)}</strong><p>${escapeHTML(event.detail)}</p>${details}</div><time title="${escapeHTML(event.time)}">${escapeHTML(new Date(event.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</time></div>`;
+  return `<div class="event"><span class="badge ${escapeHTML(event.status)}">${labels[event.status]||'Event'}</span><div class="event-main"><strong>${escapeHTML(event.chat)}</strong><p>${escapeHTML(event.detail)}</p>${memory}${details}</div><time title="${escapeHTML(event.time)}">${escapeHTML(new Date(event.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</time></div>`;
 }
 function renderActivity() {
   const expanded=new Set([...document.querySelectorAll('.event-details[open]')].map(el=>el.dataset.event));
@@ -52,6 +53,7 @@ function imageModelHint() {
 }
 function render(populate=false) {
   const s=state.settings;
+  $('#debug-token-status').textContent=state.debug_token_configured?'Debug token active. Rotating it invalidates the previous token.':'No debug token configured.';
   $('#news-usage').textContent=`${state.news_usage?.requests || 0} of ${s.news_daily_limit} news requests used today (UTC).`;
   const memory=$('#agent-form [name="consciousness"]');
   if(!populate && memory.value===formSettings.consciousness) {
@@ -89,11 +91,9 @@ function render(populate=false) {
     imageModelHint();
   }
   const prefill=state.consciousness_prefill || {};
-  $('#prefill-consciousness').disabled=prefillRunning || prefill.running || prefill.completed || !!s.consciousness.trim();
+  $('#prefill-consciousness').disabled=prefillRunning || prefill.running;
   if(prefillRunning || prefill.running) $('#prefill-status').textContent='Analyzing conversation history… Large histories may take several minutes. The result will be saved automatically.';
-  else if(prefill.completed) $('#prefill-status').textContent='History initialization completed. You and the agent can continue editing consciousness normally.';
-  else if(s.consciousness.trim()) $('#prefill-status').textContent='Consciousness already contains memory. Initialization will not overwrite it.';
-  else $('#prefill-status').textContent='One-time analysis of retained text in allowed chats, using your saved personality and guidance. Uses the configured AI provider and saves automatically. Available only while consciousness is empty.';
+  else $('#prefill-status').textContent='Refresh when needed: merge recent history into existing memory, or rebuild from the selected history window. Automatic memory review continues during normal interactions.';
 }
 async function refresh(populate=false) {state=await api('/state');render(populate);}
 async function busy(button, fn) {
@@ -121,15 +121,24 @@ for(const id of ['connection-form','agent-form']) $('#'+id).addEventListener('su
 });
 $('#prefill-consciousness').addEventListener('click',event=>busy(event.currentTarget,async()=>{
   const form=$('#agent-form');
-  if(['consciousness','system_prompt','consciousness_prompt'].some(key=>form.elements[key].value!==formSettings[key])) {
-    throw new Error('Save your personality, consciousness, and guidance edits before initializing.');
+  if(['consciousness','system_prompt','consciousness_prompt','memory_review_max_tokens'].some(key=>form.elements[key].value!==String(formSettings[key]))) {
+    throw new Error('Save your personality, consciousness, guidance, and consciousness token budget before refreshing.');
   }
   prefillRunning=true;render();
   try {
-    const result=await api('/consciousness/prefill',{method:'POST'});
+    const mode=$('#prefill-mode').value;
+    if(mode==='rebuild' && state.settings.consciousness.trim() && !window.confirm('Rebuild consciousness from the selected history? Existing memory will be replaced only after successful analysis.')) return;
+    const result=await api('/consciousness/prefill',{method:'POST',body:JSON.stringify({mode,days:Number($('#prefill-days').value)})});
     await refresh();
-    toast(`Consciousness initialized from ${result.batches} history batch(es).`);
+    toast(`Consciousness refreshed from ${result.batches} history batch(es).`);
   } finally {prefillRunning=false;}
+}));
+$('#generate-debug-token').addEventListener('click',event=>busy(event.currentTarget,async()=>{
+  const result=await api('/debug-token',{method:'POST'});
+  $('#debug-token').value=result.token;await refresh();toast('Debug token generated. Copy it now.');
+}));
+$('#revoke-debug-token').addEventListener('click',event=>busy(event.currentTarget,async()=>{
+  await api('/debug-token',{method:'DELETE'});$('#debug-token').value='';await refresh();toast('Debug access revoked.');
 }));
 $('.bot-toggle').addEventListener('click',event=>busy(event.currentTarget,async()=>{
   await api('/settings',{method:'PATCH',body:JSON.stringify({enabled:!state.settings.enabled})});await refresh();
@@ -168,7 +177,7 @@ $('#playground-form').addEventListener('submit',event=>{
         const image=document.createElement('img');image.src=url;image.alt='Generated image '+(index+1);output.append(image);
         const link=document.createElement('a');link.href=url;link.download='moose-result-'+(index+1);link.textContent='Download original ↗';output.append(link);
       }
-      $('#output-status').textContent=`Complete · ${result.tool_calls} tool calls`;
+      $('#output-status').textContent=`Complete · ${result.tool_calls} tool calls${result.memory_review ? ' · Memory: '+result.memory_review : ''}`;
     }catch(error){$('#output-status').textContent='Unable to complete';$('#playground-output').textContent=error.message;throw error;}
   });
 });

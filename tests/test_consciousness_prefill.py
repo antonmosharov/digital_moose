@@ -39,7 +39,7 @@ def response(text="Alex enjoys hiking in chat -100.", finish="stop"):
     return {"choices": [{"finish_reason": finish, "message": {"content": text}}]}
 
 
-async def test_prefill_uses_personality_history_and_is_one_time(store):
+async def test_prefill_uses_personality_history_and_can_repeat(store):
     remember(store)
     requests = []
 
@@ -57,10 +57,15 @@ async def test_prefill_uses_personality_history_and_is_one_time(store):
         assert "Alex enjoys hiking" in requests[0]["messages"][1]["content"]
         assert "tools" not in requests[0]
         assert b"Alex enjoys" not in store.db.execute("SELECT value FROM settings").fetchone()[0]
-        store.write_consciousness("", result["consciousness"])
-        with pytest.raises(UserError, match="already initialized"):
-            await prefill_consciousness(store, client)
-    assert len(requests) == 1
+        await prefill_consciousness(store, client)
+        assert (
+            json.loads(requests[-1]["messages"][1]["content"])["existing_draft"]
+            == result["consciousness"]
+        )
+        await prefill_consciousness(store, client, mode="rebuild")
+        assert json.loads(requests[-1]["messages"][1]["content"])["existing_draft"] == ""
+        assert requests[-1]["max_tokens"] == store.settings().memory_review_max_tokens
+    assert len(requests) == 3
 
 
 def test_history_filters_and_batches_all_text(store):
@@ -145,8 +150,8 @@ def test_prefill_endpoint_guards_and_state(tmp_path, monkeypatch):
         remember(store)
         with patch("app.agent.Agent.post", return_value=response()) as post:
             assert client.post("/api/consciousness/prefill", headers=headers).status_code == 200
-            assert client.post("/api/consciousness/prefill", headers=headers).status_code == 400
-        post.assert_awaited_once()
+            assert client.post("/api/consciousness/prefill", headers=headers).status_code == 200
+        assert post.await_count == 2
         assert client.get("/api/state").json()["consciousness_prefill"] == {
             "completed": True,
             "running": False,

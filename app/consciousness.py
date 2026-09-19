@@ -1,4 +1,4 @@
-"""One-time initialization of consciousness from retained conversation text."""
+"""Manual consciousness refresh from retained conversation text."""
 
 import json
 import time
@@ -13,14 +13,18 @@ from app.store import Store
 PREFILL_KEY = "consciousness_prefilled"
 
 
-def history_batches(store: Store, now: float) -> list[str]:
+def history_batches(store: Store, now: float, days: int | None = None) -> list[str]:
     settings = store.settings()
     rows = store.db.execute(
         """SELECT m.*, c.title, c.kind, c.allowed FROM messages m
            JOIN chats c ON c.id=m.chat_id
            WHERE m.sent_at BETWEEN ? AND ?
            ORDER BY m.sent_at, m.chat_id, m.thread_id, m.message_id""",
-        (now - settings.history_retention_days * 86400, now),
+        (
+            now
+            - min(days or settings.history_retention_days, settings.history_retention_days) * 86400,
+            now,
+        ),
     )
     batches, batch = [], ""
     for row in rows:
@@ -53,13 +57,15 @@ def history_batches(store: Store, now: float) -> list[str]:
     return batches
 
 
-async def prefill_consciousness(store: Store, client: httpx.AsyncClient) -> dict:
+async def prefill_consciousness(
+    store: Store, client: httpx.AsyncClient, *, days: int = 7, mode: str = "merge"
+) -> dict:
     settings = store.settings()
-    if store.state(PREFILL_KEY) or settings.consciousness.strip():
-        raise UserError("Consciousness is already initialized. Edit it directly instead.")
+    if mode not in {"merge", "rebuild"} or type(days) is not int or not 1 <= days <= 3650:
+        raise UserError("Choose merge or rebuild and 1–3650 days of history.")
     if not settings.model or not settings.api_key:
         raise UserError("Save an AI API key and chat model first.")
-    batches = history_batches(store, time.time())
+    batches = history_batches(store, time.time(), days)
     if not batches:
         raise UserError("No retained conversation text is available in allowed chats.")
     access = {(c["id"], c["kind"], c["allowed"]) for c in store.chats()}
@@ -68,7 +74,6 @@ async def prefill_consciousness(store: Store, client: httpx.AsyncClient) -> dict
         current = store.settings()
         if (
             current.consciousness != settings.consciousness
-            or store.state(PREFILL_KEY)
             or current.system_prompt != settings.system_prompt
             or current.consciousness_prompt != settings.consciousness_prompt
             or current.allow_private != settings.allow_private
@@ -80,7 +85,7 @@ async def prefill_consciousness(store: Store, client: httpx.AsyncClient) -> dict
             )
 
     agent = Agent(settings, client)
-    draft = ""
+    draft = settings.consciousness if mode == "merge" else ""
     for index, batch in enumerate(batches, 1):
         check_unchanged()
         response = await agent.post(
@@ -88,7 +93,7 @@ async def prefill_consciousness(store: Store, client: httpx.AsyncClient) -> dict
             {
                 "model": settings.model,
                 "temperature": settings.temperature,
-                "max_tokens": settings.max_tokens,
+                "max_tokens": settings.memory_review_max_tokens,
                 "messages": [
                     {
                         "role": "system",
@@ -126,7 +131,7 @@ async def prefill_consciousness(store: Store, client: httpx.AsyncClient) -> dict
         message = agent.message(response)
         if response["choices"][0].get("finish_reason") != "stop" or message.get("tool_calls"):
             raise UserError(
-                "Analysis did not finish cleanly. Nothing was saved. Increase max response tokens if the output was truncated, then retry."
+                "Analysis did not finish cleanly. Nothing was saved. Increase Consciousness output tokens if the output was truncated, then retry."
             )
         content = message.get("content")
         if not isinstance(content, str) or not content.strip() or len(content) > 50000:
