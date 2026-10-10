@@ -69,8 +69,7 @@ async def test_review_runs_even_without_optional_tools_and_has_separate_budget(
     assert answer.tools_used == ["review_consciousness"]
     assert store.read_consciousness() == "Known facts\nAlex prefers tea."
     assert requests[1]["max_tokens"] == 4500
-    if proactive:
-        assert requests[0]["max_tokens"] == 500
+    assert requests[0]["max_tokens"] == store.settings().max_tokens
     assert requests[1]["tool_choice"]["function"]["name"] == "review_consciousness"
 
 

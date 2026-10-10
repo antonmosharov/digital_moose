@@ -130,7 +130,7 @@ Manual refresh still consolidates full memory. Saving a patch rewrites the encry
 settings locally, but that does not require another LLM call or a full-memory generation.
 
 There are two output budgets: **Max response tokens** for normal conversation calls
-(proactive public calls remain capped at 500), and **Consciousness output tokens**
+(including proactive calls, which are instructed to keep replies short), and **Consciousness output tokens**
 (`memory_review_max_tokens`, default 4000) for automatic reviews and manual refreshes.
 Ordinary optional memory tool calls still share the conversation call's output budget;
 the separate mandatory review supports memory work beyond that budget. Each review

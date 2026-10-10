@@ -572,9 +572,7 @@ class Agent:
                 "model": settings.model,
                 "messages": messages,
                 "temperature": settings.temperature,
-                "max_tokens": min(settings.max_tokens, 500)
-                if prompt.proactive
-                else settings.max_tokens,
+                "max_tokens": settings.max_tokens,
             }
             if tools:
                 payload["tools"] = tools
@@ -584,7 +582,8 @@ class Agent:
                 payload["parallel_tool_calls"] = False
             completion = await self.post("/chat/completions", payload)
             message = self.message(completion)
-            if completion["choices"][0].get("finish_reason") == "length":
+            token_limit_reached = completion["choices"][0].get("finish_reason") == "length"
+            if token_limit_reached:
                 self.log_tool_failure(
                     prompt, "model_response", "output_token_limit", payload["max_tokens"]
                 )
@@ -607,6 +606,12 @@ class Agent:
                 if not prompt.proactive:
                     answer.media.extend(self.images(message))
                 if not answer.text and not answer.media:
+                    if token_limit_reached:
+                        raise UserError(
+                            f"The AI provider reached the output token limit "
+                            f"({payload['max_tokens']}) before returning an answer. "
+                            "Increase Max response tokens in Agent settings and try again."
+                        )
                     raise UserError("The AI provider returned an empty answer.")
                 return answer
             if not tools or step == max_rounds or len(calls) > 4:

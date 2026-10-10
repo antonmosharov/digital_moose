@@ -245,7 +245,38 @@ async def test_proactive_can_decline_and_has_no_image_tool():
         ).run(Prompt("Consider joining", proactive=True))
     assert answer.silent
     assert "tools" not in requests[0]
-    assert requests[0]["max_tokens"] == 500
+    assert requests[0]["max_tokens"] == Settings().max_tokens
+
+
+@pytest.mark.parametrize("proactive", [False, True])
+@pytest.mark.parametrize("finish_reason", ["length", "stop"])
+async def test_empty_completion_reports_token_exhaustion_only_when_truncated(
+    proactive, finish_reason
+):
+    def handler(request):
+        return httpx.Response(
+            200, json={"choices": [{"finish_reason": finish_reason, "message": {"content": None}}]}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        agent = Agent(Settings(api_key="key", model="chat", max_tokens=3000), client)
+        expected = "output token limit \\(3000\\)" if finish_reason == "length" else "empty answer"
+        with pytest.raises(UserError, match=expected):
+            await agent.run(Prompt("hi", proactive=proactive))
+
+
+async def test_truncated_completion_preserves_available_text():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "length", "message": {"content": "Available answer"}}]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        answer = await Agent(Settings(api_key="key", model="chat"), client).run(Prompt("hi"))
+    assert answer.text == "Available answer"
 
 
 async def test_participation_rolls_only_once_even_after_restart(store):
